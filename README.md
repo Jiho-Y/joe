@@ -27,10 +27,53 @@ Semantic Scholar API를 활용하여 학술 논문을 대량으로 검색하고 
 - 상세한 진행 상황 표시 및 오류 처리
 - 엑셀 파일 자동 포맷팅
 
-## 설치 방법
+## 🚀 빠른 시작 (터미널 사용 없이!)
+
+### 가장 쉬운 방법 - 3단계로 완료
+
+1. **GitHub에서 ZIP 다운로드**
+   - https://github.com/Jiho-Y/joe 접속
+   - 브랜치: `claude/semantic-scholar-search-011CUQ5xnUkRVMHJH2FAaWqN` 선택
+   - Code 버튼 → Download ZIP
+   - 압축 해제
+
+2. **패키지 설치 (최초 1회만)**
+   - Windows: `install_packages.bat` 더블클릭
+   - Mac/Linux: `install_packages.sh` 더블클릭
+
+3. **프로그램 실행**
+   - GUI 버전 (추천): `run_gui.bat` (또는 `run_gui.sh`) 더블클릭
+   - CLI 버전: `run_cli.bat` (또는 `run_cli.sh`) 더블클릭
+
+**그게 다입니다!** 이제 터미널 없이 더블클릭만으로 사용할 수 있습니다. 🎉
+
+> 💡 바탕화면에 바로가기를 만들면 더욱 편리합니다!
+
+### 다운로드 후 파일 구조
+```
+joe/
+├── 실행 파일 (더블클릭!)
+│   ├── run_gui.bat / run_gui.sh           ← GUI 버전 실행
+│   ├── run_cli.bat / run_cli.sh           ← CLI 버전 실행
+│   └── install_packages.bat / .sh         ← 패키지 설치
+│
+├── 프로그램 파일
+│   ├── semantic_scholar_search_gui.py     ← GUI 프로그램
+│   ├── semantic_scholar_search.py         ← CLI 프로그램
+│   └── requirements.txt                   ← 필요한 패키지
+│
+└── 문서
+    ├── README.md                          ← 이 파일
+    └── 사용방법.txt                       ← 간단한 사용 가이드
+```
+
+---
+
+## 설치 방법 (수동)
 
 ### 1. Python 요구사항
 - Python 3.7 이상
+- Python 설치 시 "Add Python to PATH" 체크 필수!
 
 ### 2. 패키지 설치
 
