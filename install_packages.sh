@@ -1,8 +1,14 @@
 #!/bin/bash
 
+# 스크립트가 위치한 디렉토리로 이동
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR"
+
 echo "========================================"
 echo "  필요한 패키지 설치 중..."
 echo "========================================"
+echo ""
+echo "작업 디렉토리: $SCRIPT_DIR"
 echo ""
 
 if command -v pip3 &> /dev/null; then
