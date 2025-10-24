@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import openpyxl
 import time
+import subprocess
 from pathlib import Path
 from datetime import datetime
 import threading
@@ -16,7 +17,7 @@ API_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 class SemanticScholarGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Semantic Scholar 논문 검색 도구 v3.0 GUI")
+        self.root.title("Semantic Scholar 논문 검색 도구 v3.1 (macOS)")
         self.root.geometry("900x800")
 
         # 변수 초기화
@@ -26,6 +27,7 @@ class SemanticScholarGUI:
         self.keywords = []
         self.is_searching = False
         self.existing_papers = []
+        self.duplicate_stats = {}  # 키워드별 중복 통계
 
         self.create_widgets()
 
@@ -35,7 +37,7 @@ class SemanticScholarGUI:
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         # 제목
-        title_label = ttk.Label(main_frame, text="🔬 Semantic Scholar 논문 검색 도구",
+        title_label = ttk.Label(main_frame, text="🔬 Semantic Scholar 논문 검색 도구 (macOS)",
                                 font=('Arial', 16, 'bold'))
         title_label.grid(row=0, column=0, columnspan=3, pady=10)
 
@@ -138,7 +140,7 @@ class SemanticScholarGUI:
         button_frame.grid(row=6, column=0, columnspan=3, pady=10)
 
         self.start_button = ttk.Button(button_frame, text="🔍 검색 시작",
-                                       command=self.start_search, style='Accent.TButton')
+                                       command=self.start_search)
         self.start_button.grid(row=0, column=0, padx=5)
 
         self.stop_button = ttk.Button(button_frame, text="⏸ 중지",
@@ -230,6 +232,14 @@ class SemanticScholarGUI:
         """프로그레스 바 업데이트"""
         self.progress_var.set(value)
         self.root.update_idletasks()
+
+    def send_macos_notification(self, title, message):
+        """macOS 데스크톱 알림 전송"""
+        try:
+            script = f'display notification "{message}" with title "{title}" sound name "Glass"'
+            subprocess.call(['osascript', '-e', script])
+        except Exception as e:
+            self.log(f"알림 전송 실패: {str(e)}")
 
     def start_search(self):
         """검색 시작"""
@@ -349,22 +359,31 @@ class SemanticScholarGUI:
                 self.log(f"📁 파일: {filename}")
                 self.log("=" * 60)
 
+                # macOS 데스크톱 알림 전송
+                self.send_macos_notification(
+                    "Semantic Scholar 검색 완료",
+                    f"총 {len(unique_papers)}개 논문 저장 완료"
+                )
+
+                # 키워드별 중복 통계 메시지 생성
+                dup_message = self.format_duplicate_stats()
+
                 # 완료 메시지
-                if messagebox.askyesno("완료",
+                completion_msg = (
                     f"검색이 완료되었습니다!\n\n"
-                    f"논문 수: {len(unique_papers)}개\n"
-                    f"파일: {filename}\n\n"
-                    f"파일을 여시겠습니까?"):
+                    f"최종 논문 수: {len(unique_papers)}개\n"
+                    f"파일: {os.path.basename(filename)}\n\n"
+                    f"{dup_message}\n"
+                    f"파일을 여시겠습니까?"
+                )
+
+                if messagebox.askyesno("완료", completion_msg):
                     try:
-                        os.startfile(filename)  # Windows
-                    except:
-                        try:
-                            os.system(f'xdg-open "{filename}"')  # Linux
-                        except:
-                            try:
-                                os.system(f'open "{filename}"')  # macOS
-                            except:
-                                pass
+                        # macOS에서 파일 열기
+                        subprocess.call(['open', filename])
+                    except Exception as e:
+                        self.log(f"파일 열기 실패: {str(e)}")
+                        messagebox.showerror("오류", f"파일을 열 수 없습니다:\n{str(e)}")
             else:
                 self.update_status("❌ 저장 실패", "red")
 
@@ -376,6 +395,20 @@ class SemanticScholarGUI:
             self.start_button.config(state='normal')
             self.stop_button.config(state='disabled')
             self.is_searching = False
+
+    def format_duplicate_stats(self):
+        """키워드별 중복 통계 포맷팅"""
+        if not self.duplicate_stats:
+            return "중복 제거 내역: 없음"
+
+        lines = ["[키워드별 중복 제거 내역]"]
+        for keyword, count in self.duplicate_stats.items():
+            lines.append(f"• {keyword}: {count}개 중복 제거")
+
+        total_removed = sum(self.duplicate_stats.values())
+        lines.append(f"\n총 {total_removed}개 중복 제거됨")
+
+        return "\n".join(lines)
 
     # 검색 관련 메서드들
     def search_semantic_scholar_single(self, keyword, limit=100, offset=0, max_retries=10):
@@ -495,6 +528,42 @@ class SemanticScholarGUI:
 
         return all_papers
 
+    def format_chicago_citation(self, paper_data):
+        """Chicago 스타일 인용 형식 생성"""
+        # 저자 처리
+        authors_list = paper_data.get('authors', [])
+        if authors_list:
+            if len(authors_list) == 1:
+                authors_str = authors_list[0].get('name', 'Unknown')
+            elif len(authors_list) == 2:
+                authors_str = f"{authors_list[0].get('name', 'Unknown')} and {authors_list[1].get('name', 'Unknown')}"
+            elif len(authors_list) > 2:
+                authors_str = f"{authors_list[0].get('name', 'Unknown')} et al."
+            else:
+                authors_str = "Unknown Author"
+        else:
+            authors_str = "Unknown Author"
+
+        # 연도
+        year = paper_data.get('year', 'n.d.')
+
+        # 제목
+        title = paper_data.get('title', 'No title')
+
+        # Venue
+        venue = paper_data.get('venue', 'Unknown venue')
+
+        # Citation Count
+        citation_count = paper_data.get('citationCount', 0)
+
+        # Chicago 형식: Author(s). Year. "Title." Venue. (Cited by: count)
+        if venue and venue != 'Unknown venue':
+            citation = f'{authors_str}. {year}. "{title}." {venue}. (Cited by: {citation_count})'
+        else:
+            citation = f'{authors_str}. {year}. "{title}." (Cited by: {citation_count})'
+
+        return citation
+
     def process_papers(self, papers_data, keyword_label=""):
         """논문 데이터 가공"""
         processed_list = []
@@ -515,6 +584,9 @@ class SemanticScholarGUI:
             if external_ids:
                 doi = external_ids.get('DOI', 'N/A')
 
+            # Chicago 인용 형식 생성
+            chicago_citation = self.format_chicago_citation(paper)
+
             processed_list.append({
                 'Keyword': keyword_label,
                 'Paper ID': paper.get('paperId', 'N/A'),
@@ -527,6 +599,7 @@ class SemanticScholarGUI:
                 'Citation Count': paper.get('citationCount', 0),
                 'Abstract': abstract,
                 'URL': paper.get('url', 'N/A'),
+                'Chicago Citation': chicago_citation,
             })
 
         return processed_list
@@ -547,7 +620,7 @@ class SemanticScholarGUI:
             return []
 
     def remove_duplicates_by_doi(self, all_papers_list):
-        """DOI 기준 중복 제거"""
+        """DOI 기준 중복 제거 및 키워드별 통계 생성"""
         self.log("-" * 60)
         self.log("중복 제거 처리 중...")
 
@@ -555,23 +628,45 @@ class SemanticScholarGUI:
         papers_with_doi = {}
         papers_without_doi = {}
 
+        # 키워드별 중복 카운트 초기화
+        keyword_duplicates = {}
+
         for paper in all_papers_list:
             doi = paper.get('DOI', 'N/A')
             paper_id = paper.get('Paper ID', 'N/A')
+            keyword = paper.get('Keyword', 'Unknown')
+
+            is_duplicate = False
 
             if doi != 'N/A':
                 if doi not in papers_with_doi:
                     papers_with_doi[doi] = paper
+                else:
+                    is_duplicate = True
             else:
                 if paper_id != 'N/A' and paper_id not in papers_without_doi:
                     papers_without_doi[paper_id] = paper
+                else:
+                    is_duplicate = True
+
+            # 중복이면 키워드별 카운트 증가
+            if is_duplicate:
+                keyword_duplicates[keyword] = keyword_duplicates.get(keyword, 0) + 1
 
         unique_papers = list(papers_with_doi.values()) + list(papers_without_doi.values())
         removed_count = original_count - len(unique_papers)
 
+        self.duplicate_stats = keyword_duplicates
+
         self.log(f"원본: {original_count}개")
         self.log(f"중복 제거: {removed_count}개")
         self.log(f"최종: {len(unique_papers)}개")
+
+        # 키워드별 중복 통계 출력
+        if keyword_duplicates:
+            self.log("\n키워드별 중복 제거:")
+            for keyword, count in keyword_duplicates.items():
+                self.log(f"  • {keyword}: {count}개")
 
         return unique_papers
 

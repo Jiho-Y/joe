@@ -315,6 +315,43 @@ def search_with_pagination(keyword, max_results=1000):
     return all_papers
 
 
+def format_chicago_citation(paper_data):
+    """Chicago 스타일 인용 형식 생성"""
+    # 저자 처리
+    authors_list = paper_data.get('authors', [])
+    if authors_list:
+        if len(authors_list) == 1:
+            authors_str = authors_list[0].get('name', 'Unknown')
+        elif len(authors_list) == 2:
+            authors_str = f"{authors_list[0].get('name', 'Unknown')} and {authors_list[1].get('name', 'Unknown')}"
+        elif len(authors_list) > 2:
+            authors_str = f"{authors_list[0].get('name', 'Unknown')} et al."
+        else:
+            authors_str = "Unknown Author"
+    else:
+        authors_str = "Unknown Author"
+
+    # 연도
+    year = paper_data.get('year', 'n.d.')
+
+    # 제목
+    title = paper_data.get('title', 'No title')
+
+    # Venue
+    venue = paper_data.get('venue', 'Unknown venue')
+
+    # Citation Count
+    citation_count = paper_data.get('citationCount', 0)
+
+    # Chicago 형식: Author(s). Year. "Title." Venue. (Cited by: count)
+    if venue and venue != 'Unknown venue':
+        citation = f'{authors_str}. {year}. "{title}." {venue}. (Cited by: {citation_count})'
+    else:
+        citation = f'{authors_str}. {year}. "{title}." (Cited by: {citation_count})'
+
+    return citation
+
+
 def process_papers(papers_data, keyword_label=""):
     """
     API에서 받은 논문 데이터를 엑셀에 저장하기 좋은 형태로 가공
@@ -349,6 +386,9 @@ def process_papers(papers_data, keyword_label=""):
         if external_ids:
             doi = external_ids.get('DOI', 'N/A')
 
+        # Chicago 인용 형식 생성
+        chicago_citation = format_chicago_citation(paper)
+
         processed_list.append({
             'Keyword': keyword_label,  # 어떤 키워드로 검색되었는지 표시
             'Paper ID': paper.get('paperId', 'N/A'),
@@ -361,6 +401,7 @@ def process_papers(papers_data, keyword_label=""):
             'Citation Count': paper.get('citationCount', 0),
             'Abstract': abstract,
             'URL': paper.get('url', 'N/A'),
+            'Chicago Citation': chicago_citation,
         })
 
     print()
@@ -416,9 +457,14 @@ def load_existing_excel(filepath):
 
 def remove_duplicates_by_doi(all_papers_list):
     """
-    DOI를 기준으로 중복 제거
+    DOI를 기준으로 중복 제거 및 키워드별 통계 생성
     - DOI가 있는 논문: DOI로 중복 제거
     - DOI가 없는 논문 (N/A): Paper ID로 중복 제거
+
+    Returns:
+        tuple: (unique_papers, keyword_duplicates)
+               unique_papers: 중복 제거된 논문 리스트
+               keyword_duplicates: 키워드별 중복 개수 딕셔너리
     """
     print_header("중복 제거 처리")
 
@@ -429,18 +475,32 @@ def remove_duplicates_by_doi(all_papers_list):
     papers_with_doi = {}
     papers_without_doi = {}
 
+    # 키워드별 중복 카운트 초기화
+    keyword_duplicates = {}
+
     for paper in all_papers_list:
         doi = paper.get('DOI', 'N/A')
         paper_id = paper.get('Paper ID', 'N/A')
+        keyword = paper.get('Keyword', 'Unknown')
+
+        is_duplicate = False
 
         if doi != 'N/A':
             # DOI가 있으면 DOI를 키로 사용 (먼저 발견된 것 유지)
             if doi not in papers_with_doi:
                 papers_with_doi[doi] = paper
+            else:
+                is_duplicate = True
         else:
             # DOI가 없으면 Paper ID를 키로 사용
             if paper_id != 'N/A' and paper_id not in papers_without_doi:
                 papers_without_doi[paper_id] = paper
+            else:
+                is_duplicate = True
+
+        # 중복이면 키워드별 카운트 증가
+        if is_duplicate:
+            keyword_duplicates[keyword] = keyword_duplicates.get(keyword, 0) + 1
 
     # 합치기
     unique_papers = list(papers_with_doi.values()) + list(papers_without_doi.values())
@@ -452,12 +512,18 @@ def remove_duplicates_by_doi(all_papers_list):
     print(f"제거된 중복 논문: {removed_count}개")
     print(f"최종 고유 논문 수: {len(unique_papers)}개")
 
+    # 키워드별 중복 통계 출력
+    if keyword_duplicates:
+        print(f"\n📊 키워드별 중복 제거 내역:")
+        for keyword, count in keyword_duplicates.items():
+            print(f"   • '{keyword}': {count}개 중복 제거")
+
     if removed_count > 0:
-        print(f"\n✅ {removed_count}개의 중복 논문이 제거되었습니다.")
+        print(f"\n✅ 총 {removed_count}개의 중복 논문이 제거되었습니다.")
     else:
         print(f"\n✅ 중복 논문이 없습니다.")
 
-    return unique_papers
+    return unique_papers, keyword_duplicates
 
 
 def save_to_excel(papers_list, filename="papers.xlsx"):
@@ -641,8 +707,8 @@ def choose_mode():
 # --- 메인 실행 부분 ---
 if __name__ == "__main__":
     print("\n" + "=" * 80)
-    print("  🔬 Semantic Scholar 논문 대량 검색 도구 v3.0")
-    print("  📌 유연한 키워드 입력 / 기존 파일 추가 / Pagination / 중복 제거")
+    print("  🔬 Semantic Scholar 논문 검색 도구 v3.1 (macOS)")
+    print("  📌 유연한 키워드 / 기존 파일 추가 / Chicago 인용 / 키워드별 중복 통계")
     print("=" * 80)
 
     if not API_KEY:
@@ -710,7 +776,7 @@ if __name__ == "__main__":
             all_papers_combined = all_papers_processed
 
         # 5. DOI 기준 중복 제거
-        unique_papers = remove_duplicates_by_doi(all_papers_combined)
+        unique_papers, keyword_duplicates = remove_duplicates_by_doi(all_papers_combined)
 
         # 6. 엑셀 파일로 저장
         print_header("엑셀 파일 저장")
