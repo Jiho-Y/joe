@@ -65,17 +65,19 @@ class CreepAnalyzer:
 
         return self.data
 
-    def detect_load_segments(self, load_interval_hours=24, search_window_hours=1.0,
-                            use_derivative=True, min_strain_acceleration=1e-6):
+    def detect_load_segments(self, initial_stabilization_hours=48, load_interval_hours=24,
+                            search_window_hours=0.5, use_derivative=True, min_strain_acceleration=1e-6):
         """
         하중 구간 자동 감지 (개선된 알고리즘)
 
         Parameters:
         -----------
+        initial_stabilization_hours : float
+            초기 안정화 시간 (시간) - 기본값 48시간 (첫 번째 하중 증가 전 안정화 기간)
         load_interval_hours : float
             하중 증가 예상 시간 간격 (시간) - 기본값 24시간
         search_window_hours : float
-            각 하중 증가 시점 탐색 윈도우 크기 (시간) - 기본값 ±1.0시간
+            각 하중 증가 시점 탐색 윈도우 크기 (시간) - 기본값 ±0.5시간
         use_derivative : bool
             2차 미분(변형률 가속도) 사용 여부 - 기본값 True
         min_strain_acceleration : float
@@ -87,7 +89,8 @@ class CreepAnalyzer:
             각 하중 구간의 시작/끝 인덱스와 응력 레벨
         """
         print("\n하중 구간 감지 중 (개선된 알고리즘)...")
-        print(f"설정: 하중 간격 {load_interval_hours}시간, 탐색 윈도우 ±{search_window_hours}시간")
+        print(f"설정: 초기 안정화 {initial_stabilization_hours}시간, 하중 간격 {load_interval_hours}시간, "
+              f"탐색 윈도우 ±{search_window_hours}시간")
 
         time = self.data[self.time_col].values
         strain = self.data[self.strain_col].values
@@ -127,9 +130,14 @@ class CreepAnalyzer:
         # 각 예상 시점 근처에서 하중 증가 지점 탐색
         load_change_indices = [0]  # 시작점
 
-        # 첫 하중 구간 이후, 24시간 간격으로 탐색
+        # 첫 번째 전환: 초기 안정화 이후, 이후는 load_interval_hours 간격으로 탐색
         for transition_idx in range(1, expected_segments):
-            expected_time_hours = load_interval_hours * transition_idx
+            if transition_idx == 1:
+                # 첫 번째 하중 증가: 초기 안정화 시간 이후
+                expected_time_hours = initial_stabilization_hours
+            else:
+                # 이후 하중 증가: 첫 번째 이후 load_interval_hours 간격
+                expected_time_hours = initial_stabilization_hours + load_interval_hours * (transition_idx - 1)
 
             # 탐색 범위 설정 (±search_window_hours)
             search_start_hours = expected_time_hours - search_window_hours
@@ -561,7 +569,17 @@ def main():
     stress_levels = [float(s.strip()) for s in stress_input.split(',')]
     print(f"입력된 하중 조건: {stress_levels} MPa")
 
-    # 1-1. 하중 증가 간격 입력 (옵션)
+    # 1-1. 초기 안정화 시간 입력 (옵션)
+    print("\n초기 안정화 시간을 입력하세요 (기본값: 48시간)")
+    print("(첫 번째 하중 증가 전 안정화 기간)")
+    stabilization_input = input("초기 안정화 시간 (시간, Enter키로 기본값 사용): ").strip()
+    if stabilization_input:
+        initial_stabilization_hours = float(stabilization_input)
+    else:
+        initial_stabilization_hours = 48.0
+    print(f"초기 안정화 시간: {initial_stabilization_hours}시간")
+
+    # 1-2. 하중 증가 간격 입력 (옵션)
     print("\n하중 증가 시간 간격을 입력하세요 (기본값: 24시간)")
     interval_input = input("하중 간격 (시간, Enter키로 기본값 사용): ").strip()
     if interval_input:
@@ -588,10 +606,11 @@ def main():
 
     # 하중 구간 감지 (개선된 알고리즘)
     analyzer.detect_load_segments(
+        initial_stabilization_hours=initial_stabilization_hours,
         load_interval_hours=load_interval_hours,
-        search_window_hours=1.0,  # ±1시간 탐색
+        search_window_hours=0.5,  # ±0.5시간 탐색 (총 1시간)
         use_derivative=True,
-        min_strain_acceleration=1e-7  # 더 민감한 임계값
+        min_strain_acceleration=1e-7  # 민감한 임계값
     )
 
     # 2차 크리프 속도 계산

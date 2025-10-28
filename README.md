@@ -47,7 +47,27 @@ pip install -r requirements.txt
 
 ## 사용 방법
 
-### 1. 기본 사용법 (대화형 모드)
+### 1. GUI 버전 (권장) 🎨
+
+```bash
+python3 creep_analyzer_gui.py
+```
+
+**특징:**
+- 직관적인 그래픽 사용자 인터페이스
+- 3개 탭 (메인/고급 설정/결과)
+- 실시간 진행 상황 표시
+- 고급 파라미터 직접 조정 가능
+- 결과 그래프 실시간 표시
+- CSV 및 그래프 내보내기
+
+**사용 순서:**
+1. **메인 탭**: 하중 조건, CSV 파일, 초기 안정화 시간, 하중 간격 입력
+2. **고급 설정 탭** (선택사항): 알고리즘 민감도 파라미터 조정
+3. **분석 시작** 버튼 클릭
+4. **결과 탭**: 분석 결과 및 그래프 확인
+
+### 2. 명령줄 버전 (대화형 모드)
 
 ```bash
 python3 creep_analyzer.py
@@ -55,9 +75,11 @@ python3 creep_analyzer.py
 
 프로그램 실행 후 다음 정보를 입력:
 1. 다단계 하중 조건 (쉼표로 구분, 예: `15, 25, 35, 45`)
-2. CSV 파일 경로
+2. 초기 안정화 시간 (시간, 기본값: 48시간)
+3. 하중 간격 (시간, 기본값: 24시간)
+4. CSV 파일 경로
 
-### 2. Python 스크립트에서 사용
+### 3. Python 스크립트에서 사용
 
 ```python
 from creep_analyzer import CreepAnalyzer
@@ -216,18 +238,22 @@ python3 creep_analyzer.py
 
 ```python
 analyzer.detect_load_segments(
+    initial_stabilization_hours=48,   # 초기 안정화 시간 (시간)
     load_interval_hours=24,           # 하중 증가 시간 간격 (시간)
-    search_window_hours=1.0,          # 탐색 윈도우 크기 (±시간)
+    search_window_hours=0.5,          # 탐색 윈도우 크기 (±시간)
     use_derivative=True,              # 2차 미분 사용 여부
     min_strain_acceleration=1e-7      # 최소 변형률 가속도 임계값 (%/s²)
 )
 ```
 
 **파라미터 설명:**
-- `load_interval_hours`: 하중이 증가하는 예상 시간 간격 (예: 24시간)
-- `search_window_hours`: 각 예상 시점에서 탐색할 범위 (예: ±1시간)
+- `initial_stabilization_hours`: 첫 번째 하중 증가 전 안정화 시간 (예: 48시간)
+- `load_interval_hours`: 이후 하중이 증가하는 시간 간격 (예: 24시간)
+- `search_window_hours`: 각 예상 시점에서 탐색할 범위 (예: ±0.5시간, 총 1시간)
 - `use_derivative`: True면 2차 미분(가속도) 사용, False면 1차 미분(속도) 사용
 - `min_strain_acceleration`: 하중 전환으로 인정할 최소 가속도 값
+
+**💡 GUI 버전에서는 "고급 설정" 탭에서 이러한 파라미터를 직접 조정할 수 있습니다!**
 
 ### 2차 크리프 탐색 파라미터 조정
 
@@ -297,6 +323,26 @@ A:
 
 ### Q: "divide by zero" 경고가 발생합니다.
 A: 이 문제는 최신 버전에서 수정되었습니다. 시간 간격이 0인 경우 자동으로 처리됩니다.
+
+### Q: GUI 버전과 명령줄 버전의 차이는 무엇인가요?
+A:
+- **GUI 버전 (creep_analyzer_gui.py)**:
+  - 그래픽 인터페이스로 사용하기 쉬움
+  - 고급 파라미터 실시간 조정 가능
+  - 결과 그래프 즉시 확인
+  - 권장 방법
+- **명령줄 버전 (creep_analyzer.py)**:
+  - 터미널에서 실행
+  - 자동화 스크립트에 적합
+  - 서버 환경에서 사용 가능
+
+## 스크린샷
+
+### GUI 메인 화면
+GUI 버전은 3개의 탭으로 구성되어 있습니다:
+1. **메인 탭**: 기본 입력 파라미터 설정
+2. **고급 설정 탭**: 알고리즘 민감도 파라미터 조정
+3. **결과 탭**: 분석 결과 및 그래프 표시
 
 ## 라이센스
 

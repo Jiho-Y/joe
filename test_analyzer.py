@@ -21,7 +21,8 @@ analyzer.load_data()
 # 샘플 데이터는 약 2.8시간 간격이므로 테스트용으로 조정
 print("\n=== 개선된 알고리즘 테스트 (샘플 데이터: 2.8시간 간격) ===")
 analyzer.detect_load_segments(
-    load_interval_hours=2.78,  # 10000초 = 2.78시간
+    initial_stabilization_hours=2.78,  # 첫 번째: 2.78시간 후
+    load_interval_hours=2.78,  # 이후: 2.78시간 간격
     search_window_hours=0.5,
     use_derivative=True,
     min_strain_acceleration=1e-8
