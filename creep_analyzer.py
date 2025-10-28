@@ -65,68 +65,127 @@ class CreepAnalyzer:
 
         return self.data
 
-    def detect_load_segments(self, strain_jump_threshold=0.01, time_diff_threshold=5):
+    def detect_load_segments(self, load_interval_hours=24, search_window_hours=1.0,
+                            use_derivative=True, min_strain_acceleration=1e-6):
         """
-        하중 구간 자동 감지
+        하중 구간 자동 감지 (개선된 알고리즘)
 
         Parameters:
         -----------
-        strain_jump_threshold : float
-            변형률 급증 감지 임계값 (%) - 기본값 0.01%
-        time_diff_threshold : float
-            시간 간격 변화 감지 임계값 (배수) - 기본값 5배
+        load_interval_hours : float
+            하중 증가 예상 시간 간격 (시간) - 기본값 24시간
+        search_window_hours : float
+            각 하중 증가 시점 탐색 윈도우 크기 (시간) - 기본값 ±1.0시간
+        use_derivative : bool
+            2차 미분(변형률 가속도) 사용 여부 - 기본값 True
+        min_strain_acceleration : float
+            최소 변형률 가속도 임계값 (%/s²) - 기본값 1e-6
 
         Returns:
         --------
         segments : list of dict
             각 하중 구간의 시작/끝 인덱스와 응력 레벨
         """
-        print("\n하중 구간 감지 중...")
+        print("\n하중 구간 감지 중 (개선된 알고리즘)...")
+        print(f"설정: 하중 간격 {load_interval_hours}시간, 탐색 윈도우 ±{search_window_hours}시간")
 
         time = self.data[self.time_col].values
         strain = self.data[self.strain_col].values
 
-        # 시간 간격 계산
+        # 시간을 시간 단위로 변환
+        time_hours = time / 3600.0
+        total_duration_hours = time_hours[-1]
+
+        print(f"전체 시험 시간: {total_duration_hours:.2f}시간 ({time[-1]/3600:.2f}시간)")
+
+        # 예상되는 하중 구간 개수 계산
+        expected_segments = len(self.stress_levels)
+        expected_transitions = expected_segments - 1
+
+        print(f"예상 하중 전환 횟수: {expected_transitions}회 (총 {expected_segments}개 구간)")
+
+        # 시간 간격 및 1차 미분 (변형률 속도) 계산
         time_diffs = np.diff(time)
-        median_time_diff = np.median(time_diffs)
+        # 0으로 나누기 방지: 매우 작은 값으로 대체
+        time_diffs = np.where(time_diffs == 0, 1e-10, time_diffs)
+        strain_rate = np.diff(strain) / time_diffs
 
-        # 변형률 변화율 계산
-        strain_rate = np.abs(np.diff(strain) / time_diffs)
+        # 2차 미분 (변형률 가속도) 계산 - 하중 증가 시점에서 급증
+        if use_derivative and len(strain_rate) > 1:
+            time_diffs_2 = np.diff(time[:-1])
+            # 0으로 나누기 방지
+            time_diffs_2 = np.where(time_diffs_2 == 0, 1e-10, time_diffs_2)
+            strain_acceleration = np.diff(strain_rate) / time_diffs_2
+            strain_acceleration_abs = np.abs(strain_acceleration)
+            # inf 값 처리
+            strain_acceleration_abs = np.where(np.isinf(strain_acceleration_abs),
+                                              np.nanmax(strain_acceleration_abs[~np.isinf(strain_acceleration_abs)]) if np.any(~np.isinf(strain_acceleration_abs)) else 1e10,
+                                              strain_acceleration_abs)
+        else:
+            strain_acceleration_abs = np.abs(strain_rate[:-1])
 
-        # 하중 증가 지점 감지
+        # 각 예상 시점 근처에서 하중 증가 지점 탐색
         load_change_indices = [0]  # 시작점
 
-        for i in range(1, len(strain_rate)):
-            # 조건 1: 변형률이 급증하는 지점
-            if i > 10:  # 초기 노이즈 제거
-                avg_recent_rate = np.mean(strain_rate[max(0, i-10):i])
-                if strain_rate[i] > avg_recent_rate * 10:  # 평균의 10배 이상
-                    load_change_indices.append(i)
-                    continue
+        # 첫 하중 구간 이후, 24시간 간격으로 탐색
+        for transition_idx in range(1, expected_segments):
+            expected_time_hours = load_interval_hours * transition_idx
 
-            # 조건 2: 데이터 기록 주기가 급변하는 지점 (30s -> 1s)
-            if time_diffs[i] < median_time_diff / time_diff_threshold:
-                if i not in load_change_indices:
-                    load_change_indices.append(i)
+            # 탐색 범위 설정 (±search_window_hours)
+            search_start_hours = expected_time_hours - search_window_hours
+            search_end_hours = expected_time_hours + search_window_hours
+
+            # 시간 범위를 인덱스로 변환
+            search_start_idx = np.searchsorted(time_hours, search_start_hours)
+            search_end_idx = np.searchsorted(time_hours, search_end_hours)
+
+            # 범위 보정
+            search_start_idx = max(1, min(search_start_idx, len(strain_acceleration_abs)))
+            search_end_idx = max(search_start_idx + 1, min(search_end_idx, len(strain_acceleration_abs)))
+
+            if search_start_idx >= search_end_idx:
+                print(f"  경고: 전환 {transition_idx} ({expected_time_hours:.1f}시간) - 탐색 범위 부족")
+                continue
+
+            print(f"  탐색 중: 전환 {transition_idx} 예상시간 {expected_time_hours:.1f}시간 "
+                  f"(범위: {search_start_hours:.1f}~{search_end_hours:.1f}시간)")
+
+            # 탐색 범위 내에서 변형률 가속도가 최대인 지점 찾기
+            search_region = strain_acceleration_abs[search_start_idx:search_end_idx]
+
+            if len(search_region) == 0:
+                print(f"    경고: 탐색 범위가 비어있음")
+                continue
+
+            # 가속도가 임계값 이상인 지점들 찾기
+            candidates = np.where(search_region > min_strain_acceleration)[0]
+
+            if len(candidates) == 0:
+                # 임계값을 만족하는 지점이 없으면 최대값 사용
+                max_idx_in_region = np.argmax(search_region)
+                detected_idx = search_start_idx + max_idx_in_region
+                max_acceleration = search_region[max_idx_in_region]
+                print(f"    임계값 미달, 최대값 사용: 인덱스 {detected_idx}, "
+                      f"시간 {time_hours[detected_idx]:.2f}시간, "
+                      f"가속도 {max_acceleration:.2e} %/s²")
+            else:
+                # 가장 큰 가속도를 가진 지점 선택
+                max_idx_among_candidates = candidates[np.argmax(search_region[candidates])]
+                detected_idx = search_start_idx + max_idx_among_candidates
+                max_acceleration = search_region[max_idx_among_candidates]
+                print(f"    감지: 인덱스 {detected_idx}, "
+                      f"시간 {time_hours[detected_idx]:.2f}시간, "
+                      f"가속도 {max_acceleration:.2e} %/s²")
+
+            # 중복 방지: 이전 지점과 충분히 떨어져 있는지 확인
+            if detected_idx - load_change_indices[-1] > 100:
+                load_change_indices.append(detected_idx)
+            else:
+                print(f"    경고: 이전 전환점과 너무 가까움 (건너뜀)")
 
         load_change_indices.append(len(strain) - 1)  # 끝점
 
-        # 중복 제거 및 정렬
-        load_change_indices = sorted(list(set(load_change_indices)))
-
-        # 너무 짧은 구간 제거 (최소 100개 데이터 포인트)
-        filtered_indices = [load_change_indices[0]]
-        for idx in load_change_indices[1:]:
-            if idx - filtered_indices[-1] > 100:
-                filtered_indices.append(idx)
-
-        # 마지막 인덱스 추가
-        if filtered_indices[-1] != load_change_indices[-1]:
-            filtered_indices.append(load_change_indices[-1])
-
-        load_change_indices = filtered_indices
-
-        print(f"감지된 하중 변경 지점: {len(load_change_indices) - 1}개 구간")
+        print(f"\n최종 감지된 하중 구간: {len(load_change_indices) - 1}개")
 
         # 구간별 데이터 분할
         self.segments = []
@@ -196,10 +255,13 @@ class CreepAnalyzer:
         try:
             strain_smooth = savgol_filter(strain, window_size, poly_order)
             time_diffs = np.diff(time)
+            # 0으로 나누기 방지
+            time_diffs = np.where(time_diffs == 0, 1e-10, time_diffs)
             strain_rate = np.diff(strain_smooth) / time_diffs
         except:
             # 필터 적용 실패 시 단순 미분
             time_diffs = np.diff(time)
+            time_diffs = np.where(time_diffs == 0, 1e-10, time_diffs)
             strain_rate = np.diff(strain) / time_diffs
 
         # 변형률 속도를 다시 스무딩
@@ -499,6 +561,15 @@ def main():
     stress_levels = [float(s.strip()) for s in stress_input.split(',')]
     print(f"입력된 하중 조건: {stress_levels} MPa")
 
+    # 1-1. 하중 증가 간격 입력 (옵션)
+    print("\n하중 증가 시간 간격을 입력하세요 (기본값: 24시간)")
+    interval_input = input("하중 간격 (시간, Enter키로 기본값 사용): ").strip()
+    if interval_input:
+        load_interval_hours = float(interval_input)
+    else:
+        load_interval_hours = 24.0
+    print(f"하중 간격: {load_interval_hours}시간")
+
     # 2. CSV 파일 경로 입력
     print("\n[2단계] CSV 파일 경로 입력")
     csv_path = input("CSV 파일 경로를 입력하세요: ").strip()
@@ -515,8 +586,13 @@ def main():
     # 데이터 로드
     analyzer.load_data()
 
-    # 하중 구간 감지
-    analyzer.detect_load_segments()
+    # 하중 구간 감지 (개선된 알고리즘)
+    analyzer.detect_load_segments(
+        load_interval_hours=load_interval_hours,
+        search_window_hours=1.0,  # ±1시간 탐색
+        use_derivative=True,
+        min_strain_acceleration=1e-7  # 더 민감한 임계값
+    )
 
     # 2차 크리프 속도 계산
     analyzer.calculate_secondary_creep_rates()
