@@ -6,7 +6,7 @@ Mac에서 사용 가능한 논문 검색 및 필터링 도구
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import pandas as pd
 import requests
 import time
@@ -15,6 +15,45 @@ import re
 from pathlib import Path
 from datetime import datetime
 import threading
+import json
+import os
+
+
+class ConfigManager:
+    """설정 파일 관리 클래스"""
+
+    def __init__(self, config_file: str = "config.json"):
+        self.config_file = Path.home() / ".paper_search_filter" / config_file
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        self.config = self.load_config()
+
+    def load_config(self) -> Dict:
+        """설정 파일 로드"""
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"설정 파일 로드 오류: {e}")
+                return {}
+        return {}
+
+    def save_config(self):
+        """설정 파일 저장"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"설정 파일 저장 오류: {e}")
+
+    def get(self, key: str, default=None):
+        """설정 값 가져오기"""
+        return self.config.get(key, default)
+
+    def set(self, key: str, value):
+        """설정 값 저장"""
+        self.config[key] = value
+        self.save_config()
 
 
 class SemanticScholarAPI:
@@ -510,11 +549,18 @@ class PaperSearchFilterGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Semantic Scholar 논문 검색 및 필터링 도구")
-        self.root.geometry("900x700")
+        self.root.geometry("1200x800")
+
+        # 설정 관리자
+        self.config = ConfigManager()
 
         # API 객체
         self.api = SemanticScholarAPI()
         self.filter_obj = None
+
+        # Excel 뷰어 데이터
+        self.current_df = None
+        self.current_excel_path = None
 
         # 탭 생성
         self.notebook = ttk.Notebook(root)
@@ -530,6 +576,11 @@ class PaperSearchFilterGUI:
         self.notebook.add(self.filter_tab, text="논문 필터링")
         self.create_filter_tab()
 
+        # 탭 3: Excel 뷰어/에디터
+        self.excel_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.excel_tab, text="Excel 뷰어/에디터")
+        self.create_excel_tab()
+
     def create_search_tab(self):
         """논문 검색 탭 생성"""
         # 검색 설정 프레임
@@ -539,9 +590,18 @@ class PaperSearchFilterGUI:
         # API 키 입력
         ttk.Label(settings_frame, text="API Key:").grid(row=0, column=0, sticky='w', pady=5)
         self.api_key_var = tk.StringVar()
+
+        # 저장된 API 키 자동 로드
+        saved_api_key = self.config.get('api_key', '')
+        if saved_api_key:
+            self.api_key_var.set(saved_api_key)
+
         api_key_entry = ttk.Entry(settings_frame, textvariable=self.api_key_var, width=50, show='*')
         api_key_entry.grid(row=0, column=1, columnspan=2, sticky='ew', pady=5, padx=5)
-        ttk.Label(settings_frame, text="(선택사항 - 더 높은 rate limit)", font=('', 8)).grid(row=0, column=3, sticky='w')
+
+        # API 키 저장 버튼
+        ttk.Button(settings_frame, text="저장", command=self.save_api_key, width=8).grid(row=0, column=3, pady=5, padx=5)
+        ttk.Label(settings_frame, text="(자동 로드됨)", font=('', 8)).grid(row=0, column=4, sticky='w')
 
         # 키워드 입력
         ttk.Label(settings_frame, text="검색 키워드:").grid(row=1, column=0, sticky='w', pady=5)
@@ -920,6 +980,245 @@ class PaperSearchFilterGUI:
 
                 self.filter_result_text.insert(tk.END, f"\n\n✓ 저장 완료: {filename}")
                 messagebox.showinfo("완료", f"필터링 결과가 저장되었습니다:\n{filename}")
+            except Exception as e:
+                messagebox.showerror("오류", f"저장 중 오류가 발생했습니다:\n{str(e)}")
+
+    def save_api_key(self):
+        """API 키 저장"""
+        api_key = self.api_key_var.get().strip()
+        if api_key:
+            self.config.set('api_key', api_key)
+            messagebox.showinfo("저장 완료", "API 키가 저장되었습니다.\n다음 실행 시 자동으로 로드됩니다.")
+        else:
+            messagebox.showwarning("경고", "API 키를 입력해주세요.")
+
+    def create_excel_tab(self):
+        """Excel 뷰어/에디터 탭 생성"""
+        # 파일 열기 프레임
+        file_frame = ttk.LabelFrame(self.excel_tab, text="파일 열기", padding=10)
+        file_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(file_frame, text="Excel 파일:").grid(row=0, column=0, sticky='w', pady=5)
+        self.excel_file_var = tk.StringVar()
+        ttk.Entry(file_frame, textvariable=self.excel_file_var, width=60).grid(row=0, column=1, sticky='ew', pady=5, padx=5)
+        ttk.Button(file_frame, text="찾아보기", command=self.browse_excel_file).grid(row=0, column=2, pady=5, padx=5)
+        ttk.Button(file_frame, text="열기", command=self.load_excel_file).grid(row=0, column=3, pady=5, padx=5)
+
+        file_frame.columnconfigure(1, weight=1)
+
+        # 도구 프레임
+        tools_frame = ttk.Frame(self.excel_tab)
+        tools_frame.pack(fill='x', padx=10, pady=5)
+
+        ttk.Button(tools_frame, text="선택 행 삭제", command=self.delete_selected_rows, width=15).pack(side='left', padx=5)
+        ttk.Button(tools_frame, text="변경사항 저장", command=self.save_excel_changes, width=15).pack(side='left', padx=5)
+        ttk.Button(tools_frame, text="다른 이름으로 저장", command=self.save_excel_as, width=18).pack(side='left', padx=5)
+        ttk.Button(tools_frame, text="새로고침", command=self.refresh_excel_view, width=12).pack(side='left', padx=5)
+
+        # 통계 레이블
+        self.excel_stats_label = ttk.Label(tools_frame, text="", font=('', 9))
+        self.excel_stats_label.pack(side='right', padx=10)
+
+        # Treeview 프레임
+        tree_frame = ttk.Frame(self.excel_tab)
+        tree_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # 스크롤바
+        y_scrollbar = ttk.Scrollbar(tree_frame, orient='vertical')
+        y_scrollbar.pack(side='right', fill='y')
+
+        x_scrollbar = ttk.Scrollbar(tree_frame, orient='horizontal')
+        x_scrollbar.pack(side='bottom', fill='x')
+
+        # Treeview
+        self.excel_tree = ttk.Treeview(
+            tree_frame,
+            yscrollcommand=y_scrollbar.set,
+            xscrollcommand=x_scrollbar.set,
+            selectmode='extended'
+        )
+        self.excel_tree.pack(fill='both', expand=True)
+
+        y_scrollbar.config(command=self.excel_tree.yview)
+        x_scrollbar.config(command=self.excel_tree.xview)
+
+        # 더블클릭으로 셀 편집
+        self.excel_tree.bind('<Double-1>', self.on_cell_double_click)
+
+    def browse_excel_file(self):
+        """Excel 파일 찾아보기"""
+        filename = filedialog.askopenfilename(
+            filetypes=[
+                ("Excel files", "*.xlsx *.xls"),
+                ("CSV files", "*.csv"),
+                ("All files", "*.*")
+            ]
+        )
+        if filename:
+            self.excel_file_var.set(filename)
+
+    def load_excel_file(self):
+        """Excel 파일 로드"""
+        file_path = self.excel_file_var.get().strip()
+        if not file_path:
+            messagebox.showwarning("경고", "파일을 선택해주세요.")
+            return
+
+        try:
+            # 파일 읽기
+            file_ext = Path(file_path).suffix.lower()
+            if file_ext == '.csv':
+                self.current_df = pd.read_csv(file_path, encoding='utf-8-sig')
+            else:
+                self.current_df = pd.read_excel(file_path, engine='openpyxl')
+
+            self.current_excel_path = file_path
+
+            # Treeview 업데이트
+            self.refresh_excel_view()
+
+            messagebox.showinfo("성공", f"{len(self.current_df)}개 행이 로드되었습니다.")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"파일 로드 실패:\n{str(e)}")
+
+    def refresh_excel_view(self):
+        """Excel 뷰 새로고침"""
+        if self.current_df is None:
+            return
+
+        # 기존 트리 내용 삭제
+        for item in self.excel_tree.get_children():
+            self.excel_tree.delete(item)
+
+        # 컬럼 설정
+        columns = list(self.current_df.columns)
+        self.excel_tree['columns'] = columns
+        self.excel_tree['show'] = 'headings'
+
+        # 컬럼 헤더 설정
+        for col in columns:
+            self.excel_tree.heading(col, text=col)
+            self.excel_tree.column(col, width=150, anchor='w')
+
+        # 데이터 삽입
+        for idx, row in self.current_df.iterrows():
+            values = [str(val) if pd.notna(val) else '' for val in row]
+            self.excel_tree.insert('', 'end', iid=str(idx), values=values)
+
+        # 통계 업데이트
+        self.excel_stats_label.config(text=f"총 {len(self.current_df)}개 행")
+
+    def on_cell_double_click(self, event):
+        """셀 더블클릭 시 편집"""
+        if self.current_df is None:
+            return
+
+        # 선택된 셀 정보 가져오기
+        region = self.excel_tree.identify('region', event.x, event.y)
+        if region != 'cell':
+            return
+
+        column = self.excel_tree.identify_column(event.x)
+        row = self.excel_tree.identify_row(event.y)
+
+        if not column or not row:
+            return
+
+        # 컬럼 인덱스 계산 (#1 -> 0)
+        col_idx = int(column.replace('#', '')) - 1
+        col_name = self.excel_tree['columns'][col_idx]
+
+        # 현재 값 가져오기
+        current_value = self.excel_tree.item(row, 'values')[col_idx]
+
+        # 편집 다이얼로그
+        new_value = tk.simpledialog.askstring(
+            "셀 편집",
+            f"컬럼: {col_name}\n\n현재 값:",
+            initialvalue=current_value
+        )
+
+        if new_value is not None:
+            # DataFrame 업데이트
+            row_idx = int(row)
+            self.current_df.at[row_idx, col_name] = new_value
+
+            # Treeview 업데이트
+            values = list(self.excel_tree.item(row, 'values'))
+            values[col_idx] = new_value
+            self.excel_tree.item(row, values=values)
+
+    def delete_selected_rows(self):
+        """선택된 행 삭제"""
+        if self.current_df is None:
+            messagebox.showwarning("경고", "파일을 먼저 로드해주세요.")
+            return
+
+        selected_items = self.excel_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("경고", "삭제할 행을 선택해주세요.")
+            return
+
+        # 확인
+        if not messagebox.askyesno("확인", f"{len(selected_items)}개 행을 삭제하시겠습니까?"):
+            return
+
+        # 행 인덱스 수집
+        row_indices = [int(item) for item in selected_items]
+
+        # DataFrame에서 삭제
+        self.current_df = self.current_df.drop(index=row_indices).reset_index(drop=True)
+
+        # 뷰 새로고침
+        self.refresh_excel_view()
+
+        messagebox.showinfo("완료", f"{len(row_indices)}개 행이 삭제되었습니다.")
+
+    def save_excel_changes(self):
+        """변경사항 저장 (원본 파일에)"""
+        if self.current_df is None:
+            messagebox.showwarning("경고", "파일을 먼저 로드해주세요.")
+            return
+
+        if not self.current_excel_path:
+            messagebox.showwarning("경고", "파일 경로가 없습니다. '다른 이름으로 저장'을 사용하세요.")
+            return
+
+        try:
+            if self.current_excel_path.endswith('.csv'):
+                self.current_df.to_csv(self.current_excel_path, index=False, encoding='utf-8-sig')
+            else:
+                self.current_df.to_excel(self.current_excel_path, index=False, engine='openpyxl')
+
+            messagebox.showinfo("완료", f"변경사항이 저장되었습니다:\n{self.current_excel_path}")
+        except Exception as e:
+            messagebox.showerror("오류", f"저장 중 오류가 발생했습니다:\n{str(e)}")
+
+    def save_excel_as(self):
+        """다른 이름으로 저장"""
+        if self.current_df is None:
+            messagebox.showwarning("경고", "파일을 먼저 로드해주세요.")
+            return
+
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv"),
+                ("All files", "*.*")
+            ]
+        )
+
+        if filename:
+            try:
+                if filename.endswith('.csv'):
+                    self.current_df.to_csv(filename, index=False, encoding='utf-8-sig')
+                else:
+                    self.current_df.to_excel(filename, index=False, engine='openpyxl')
+
+                self.current_excel_path = filename
+                messagebox.showinfo("완료", f"파일이 저장되었습니다:\n{filename}")
             except Exception as e:
                 messagebox.showerror("오류", f"저장 중 오류가 발생했습니다:\n{str(e)}")
 
