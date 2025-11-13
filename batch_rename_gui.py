@@ -7,7 +7,7 @@
 import os
 import json
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 import re
 from datetime import datetime
@@ -25,6 +25,7 @@ class BatchRenameGUI:
         self.undo_history = []  # 실행 취소 히스토리
         self.recent_folders = []  # 최근 폴더 목록
         self.config_file = os.path.expanduser("~/.batch_rename_config.json")
+        self.manual_renames = {}  # 수동으로 변경된 파일 이름 저장
 
         # 다크모드 설정
         self.dark_mode = tk.BooleanVar(value=False)
@@ -41,6 +42,9 @@ class BatchRenameGUI:
         # 초기 테마 적용
         self.apply_theme()
 
+        # 실시간 미리보기 설정
+        self.setup_realtime_preview()
+
     def setup_themes(self):
         """다크/라이트 모드 테마 설정"""
         self.themes = {
@@ -54,18 +58,20 @@ class BatchRenameGUI:
                 'highlight': '#ffffcc',
                 'button_bg': '#e1e1e1',
                 'entry_bg': '#ffffff',
+                'entry_fg': '#000000',
                 'frame_bg': '#f0f0f0',
             },
             'dark': {
                 'bg': '#2b2b2b',
-                'fg': '#ffffff',
+                'fg': '#e0e0e0',
                 'select_bg': '#0078d7',
                 'select_fg': '#ffffff',
                 'tree_bg': '#1e1e1e',
-                'tree_fg': '#ffffff',
-                'highlight': '#3a3a00',
+                'tree_fg': '#e0e0e0',
+                'highlight': '#4a4a00',
                 'button_bg': '#3c3c3c',
-                'entry_bg': '#3c3c3c',
+                'entry_bg': '#2d2d2d',
+                'entry_fg': '#e0e0e0',
                 'frame_bg': '#2b2b2b',
             }
         }
@@ -93,6 +99,32 @@ class BatchRenameGUI:
         style.configure('TButton', background=colors['button_bg'], foreground=colors['fg'])
         style.map('TButton', background=[('active', colors['select_bg'])])
 
+        # Entry 스타일
+        style.configure('TEntry', fieldbackground=colors['entry_bg'], foreground=colors['entry_fg'])
+        style.map('TEntry',
+                 fieldbackground=[('readonly', colors['entry_bg'])],
+                 foreground=[('readonly', colors['entry_fg'])])
+
+        # Combobox 스타일
+        style.configure('TCombobox',
+                       fieldbackground=colors['entry_bg'],
+                       background=colors['entry_bg'],
+                       foreground=colors['entry_fg'])
+        style.map('TCombobox',
+                 fieldbackground=[('readonly', colors['entry_bg'])],
+                 foreground=[('readonly', colors['entry_fg'])],
+                 selectbackground=[('readonly', colors['select_bg'])],
+                 selectforeground=[('readonly', colors['select_fg'])])
+
+        # Spinbox 스타일
+        style.configure('TSpinbox',
+                       fieldbackground=colors['entry_bg'],
+                       background=colors['entry_bg'],
+                       foreground=colors['entry_fg'])
+        style.map('TSpinbox',
+                 fieldbackground=[('readonly', colors['entry_bg'])],
+                 foreground=[('readonly', colors['entry_fg'])])
+
         # 체크버튼 스타일
         style.configure('TCheckbutton', background=colors['bg'], foreground=colors['fg'])
 
@@ -104,16 +136,28 @@ class BatchRenameGUI:
                        background=colors['tree_bg'],
                        foreground=colors['tree_fg'],
                        fieldbackground=colors['tree_bg'])
-        style.map('Treeview', background=[('selected', colors['select_bg'])])
+        style.map('Treeview',
+                 background=[('selected', colors['select_bg'])],
+                 foreground=[('selected', colors['select_fg'])])
 
         # Treeview 헤더
         style.configure('Treeview.Heading',
                        background=colors['button_bg'],
                        foreground=colors['fg'])
+        style.map('Treeview.Heading',
+                 background=[('active', colors['select_bg'])])
 
         # 변경된 항목 하이라이트
         if hasattr(self, 'tree'):
             self.tree.tag_configure('changed', background=colors['highlight'])
+            self.tree.tag_configure('manual', background=colors['select_bg'], foreground=colors['select_fg'])
+
+        # Notebook 스타일
+        style.configure('TNotebook', background=colors['bg'])
+        style.configure('TNotebook.Tab', background=colors['button_bg'], foreground=colors['fg'])
+        style.map('TNotebook.Tab',
+                 background=[('selected', colors['select_bg'])],
+                 foreground=[('selected', colors['select_fg'])])
 
     def toggle_theme(self):
         """테마 토글"""
@@ -198,6 +242,8 @@ class BatchRenameGUI:
         edit_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="편집", menu=edit_menu)
         edit_menu.add_command(label="실행 취소 (Undo)", command=self.undo_rename, accelerator="Cmd+Z")
+        edit_menu.add_separator()
+        edit_menu.add_command(label="모든 수동 변경 취소", command=self.clear_manual_renames)
 
         # 보기 메뉴
         view_menu = tk.Menu(menubar, tearoff=0)
@@ -235,8 +281,11 @@ class BatchRenameGUI:
         ttk.Button(filter_frame, text="새로고침",
                   command=self.refresh_files).grid(row=0, column=2, padx=5)
 
+        ttk.Label(filter_frame, text="💡 팁: 파일명을 더블클릭하여 수동으로 편집 가능",
+                 font=('', 9, 'italic')).grid(row=0, column=3, padx=20)
+
         # 중간 프레임: 변경 옵션
-        options_frame = ttk.LabelFrame(self.root, text="변경 옵션", padding="10")
+        options_frame = ttk.LabelFrame(self.root, text="변경 옵션 (자동 미리보기)", padding="10")
         options_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E),
                           padx=10, pady=10)
 
@@ -343,7 +392,7 @@ class BatchRenameGUI:
         button_frame = ttk.Frame(self.root, padding="10")
         button_frame.grid(row=3, column=0, columnspan=2)
 
-        ttk.Button(button_frame, text="미리보기",
+        ttk.Button(button_frame, text="미리보기 새로고침",
                   command=self.preview_changes).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="실행",
                   command=self.execute_rename).pack(side=tk.LEFT, padx=5)
@@ -361,10 +410,13 @@ class BatchRenameGUI:
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=15)
 
         self.tree.heading("original", text="현재 이름")
-        self.tree.heading("new", text="변경될 이름")
+        self.tree.heading("new", text="변경될 이름 (더블클릭으로 수동 편집)")
 
         self.tree.column("original", width=550)
         self.tree.column("new", width=550)
+
+        # 더블클릭 이벤트 바인딩
+        self.tree.bind('<Double-Button-1>', self.on_tree_double_click)
 
         # 스크롤바
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -383,6 +435,84 @@ class BatchRenameGUI:
         self.status_label = ttk.Label(self.root, text="준비", relief=tk.SUNKEN, anchor=tk.W)
         self.status_label.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E))
 
+    def setup_realtime_preview(self):
+        """실시간 미리보기 설정"""
+        # Entry 위젯에 이벤트 바인딩
+        self.prefix_entry.bind('<KeyRelease>', lambda e: self.auto_preview())
+        self.suffix_entry.bind('<KeyRelease>', lambda e: self.auto_preview())
+        self.find_entry.bind('<KeyRelease>', lambda e: self.auto_preview())
+        self.replace_entry.bind('<KeyRelease>', lambda e: self.auto_preview())
+
+        # BooleanVar에 trace 추가
+        self.case_sensitive.trace('w', lambda *args: self.auto_preview())
+        self.use_regex.trace('w', lambda *args: self.auto_preview())
+        self.add_numbering.trace('w', lambda *args: self.auto_preview())
+        self.remove_spaces.trace('w', lambda *args: self.auto_preview())
+        self.replace_spaces.trace('w', lambda *args: self.auto_preview())
+        self.remove_special.trace('w', lambda *args: self.auto_preview())
+
+        # StringVar에 trace 추가
+        self.case_change.trace('w', lambda *args: self.auto_preview())
+
+        # Spinbox 이벤트
+        self.start_num.bind('<KeyRelease>', lambda e: self.auto_preview())
+        self.start_num.bind('<<Increment>>', lambda e: self.auto_preview())
+        self.start_num.bind('<<Decrement>>', lambda e: self.auto_preview())
+        self.padding.bind('<KeyRelease>', lambda e: self.auto_preview())
+        self.padding.bind('<<Increment>>', lambda e: self.auto_preview())
+        self.padding.bind('<<Decrement>>', lambda e: self.auto_preview())
+
+        # Combobox 이벤트
+        self.number_position.bind('<<ComboboxSelected>>', lambda e: self.auto_preview())
+
+    def auto_preview(self):
+        """자동 미리보기 (실시간)"""
+        if self.files_list:
+            self.preview_changes()
+
+    def on_tree_double_click(self, event):
+        """트리 더블클릭 시 수동 편집"""
+        region = self.tree.identify('region', event.x, event.y)
+        if region != 'cell':
+            return
+
+        column = self.tree.identify_column(event.x)
+        if column != '#2':  # 두 번째 컬럼 (변경될 이름)만 편집 가능
+            return
+
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+
+        # 현재 값 가져오기
+        values = self.tree.item(item, 'values')
+        if not values or len(values) < 2:
+            return
+
+        original_name = values[0]
+        current_new_name = values[1]
+
+        # 편집 다이얼로그
+        new_name = simpledialog.askstring(
+            "파일명 수동 편집",
+            f"원본: {original_name}\n\n새 파일명을 입력하세요:",
+            initialvalue=current_new_name,
+            parent=self.root
+        )
+
+        if new_name and new_name != original_name:
+            # 수동 변경 저장
+            self.manual_renames[original_name] = new_name
+            # 미리보기 업데이트
+            self.preview_changes()
+
+    def clear_manual_renames(self):
+        """모든 수동 변경 취소"""
+        if self.manual_renames:
+            self.manual_renames.clear()
+            self.preview_changes()
+            messagebox.showinfo("완료", "모든 수동 변경이 취소되었습니다.")
+
     def toggle_numbering(self):
         """순차 번호 옵션 활성화/비활성화"""
         enabled = self.add_numbering.get()
@@ -398,6 +528,7 @@ class BatchRenameGUI:
             self.selected_folder = folder
             self.folder_label.config(text=folder)
             self.add_to_recent_folders(folder)
+            self.manual_renames.clear()  # 새 폴더 선택 시 수동 변경 초기화
             self.load_files()
 
     def load_files(self):
@@ -443,7 +574,7 @@ class BatchRenameGUI:
                              if os.path.splitext(f)[1] == filter_value]
 
         self.files_list.sort()
-        self.update_tree_view()
+        self.auto_preview()  # 필터 변경 시 자동 미리보기
         self.status_label.config(text=f"{len(self.files_list)}개의 파일 (전체: {len(self.all_files)}개)")
 
     def refresh_files(self):
@@ -461,7 +592,12 @@ class BatchRenameGUI:
         for i, original in enumerate(self.files_list):
             new_name = new_names[i] if new_names else original
             # 변경사항이 있으면 태그 추가
-            tag = 'changed' if new_name != original else ''
+            if original in self.manual_renames:
+                tag = 'manual'  # 수동 변경
+            elif new_name != original:
+                tag = 'changed'  # 자동 변경
+            else:
+                tag = ''
             self.tree.insert("", tk.END, values=(original, new_name), tags=(tag,))
 
         # 변경된 항목 하이라이트 (테마에 맞게)
@@ -469,6 +605,10 @@ class BatchRenameGUI:
 
     def generate_new_name(self, original_name, index):
         """새 파일 이름 생성"""
+        # 수동으로 변경된 경우 우선
+        if original_name in self.manual_renames:
+            return self.manual_renames[original_name]
+
         name, ext = os.path.splitext(original_name)
         new_name = name
 
@@ -527,21 +667,23 @@ class BatchRenameGUI:
 
         # 순차 번호
         if self.add_numbering.get():
-            start = int(self.start_num.get())
-            padding = int(self.padding.get())
-            number = str(start + index).zfill(padding)
+            try:
+                start = int(self.start_num.get())
+                padding = int(self.padding.get())
+                number = str(start + index).zfill(padding)
 
-            if self.number_position.get() == "앞":
-                new_name = number + "_" + new_name
-            else:
-                new_name = new_name + "_" + number
+                if self.number_position.get() == "앞":
+                    new_name = number + "_" + new_name
+                else:
+                    new_name = new_name + "_" + number
+            except ValueError:
+                pass  # 숫자 변환 오류 시 무시
 
         return new_name + ext
 
     def preview_changes(self):
         """변경 사항 미리보기"""
         if not self.files_list:
-            messagebox.showwarning("경고", "먼저 폴더를 선택하세요.")
             return
 
         new_names = []
@@ -554,7 +696,12 @@ class BatchRenameGUI:
         # 변경된 파일 개수 계산
         changed_count = sum(1 for i, orig in enumerate(self.files_list)
                           if orig != new_names[i])
-        self.status_label.config(text=f"{changed_count}개의 파일이 변경될 예정입니다.")
+        manual_count = len(self.manual_renames)
+
+        status_text = f"{changed_count}개의 파일이 변경될 예정"
+        if manual_count > 0:
+            status_text += f" (수동 편집: {manual_count}개)"
+        self.status_label.config(text=status_text)
 
     def execute_rename(self):
         """실제 파일 이름 변경 실행"""
@@ -575,9 +722,13 @@ class BatchRenameGUI:
             messagebox.showinfo("정보", "변경할 파일이 없습니다.")
             return
 
-        result = messagebox.askyesno("확인",
-                                    f"{changed_count}개의 파일 이름을 변경하시겠습니까?\n"
-                                    "실행 취소 기능으로 되돌릴 수 있습니다.")
+        manual_count = len(self.manual_renames)
+        msg = f"{changed_count}개의 파일 이름을 변경하시겠습니까?"
+        if manual_count > 0:
+            msg += f"\n(수동 편집: {manual_count}개 포함)"
+        msg += "\n\n실행 취소 기능으로 되돌릴 수 있습니다."
+
+        result = messagebox.askyesno("확인", msg)
 
         if not result:
             return
@@ -615,6 +766,9 @@ class BatchRenameGUI:
                 'renames': rename_log,
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
+
+        # 수동 변경 내역 초기화
+        self.manual_renames.clear()
 
         # 결과 메시지
         message = f"성공: {success_count}개\n실패: {error_count}개"
@@ -699,6 +853,7 @@ class BatchRenameGUI:
         self.remove_spaces.set(False)
         self.replace_spaces.set(False)
         self.remove_special.set(False)
+        self.manual_renames.clear()
         self.toggle_numbering()
 
         # 미리보기 초기화
