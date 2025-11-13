@@ -78,10 +78,12 @@ class BatchRenameGUI:
                        fieldbackground=colors['entry_bg'],
                        background=colors['entry_bg'],
                        foreground=colors['entry_fg'],
-                       arrowcolor=colors['fg'])
+                       arrowcolor=colors['fg'],
+                       insertcolor=colors['insert_bg'])
         style.map('TCombobox',
-                 fieldbackground=[('readonly', colors['entry_bg'])],
-                 foreground=[('readonly', colors['entry_fg'])],
+                 fieldbackground=[('readonly', colors['entry_bg']), ('!readonly', colors['entry_bg'])],
+                 foreground=[('readonly', colors['entry_fg']), ('!readonly', colors['entry_fg'])],
+                 background=[('readonly', colors['entry_bg']), ('!readonly', colors['entry_bg'])],
                  selectbackground=[('readonly', colors['select_bg'])],
                  selectforeground=[('readonly', colors['select_fg'])])
 
@@ -124,7 +126,11 @@ class BatchRenameGUI:
                 entry.config(bg=colors['entry_bg'], fg=colors['entry_fg'],
                            insertbackground=colors['insert_bg'],
                            selectbackground=colors['select_bg'],
-                           selectforeground=colors['select_fg'])
+                           selectforeground=colors['select_fg'],
+                           highlightbackground=colors['bg'],
+                           highlightcolor=colors['select_bg'],
+                           highlightthickness=1,
+                           disabledforeground=colors['fg'])
 
             # Spinbox 위젯들
             for spinbox in [self.start_num, self.padding]:
@@ -132,7 +138,12 @@ class BatchRenameGUI:
                              insertbackground=colors['insert_bg'],
                              selectbackground=colors['select_bg'],
                              selectforeground=colors['select_fg'],
-                             buttonbackground=colors['button_bg'])
+                             buttonbackground=colors['button_bg'],
+                             highlightbackground=colors['bg'],
+                             highlightcolor=colors['select_bg'],
+                             highlightthickness=1,
+                             disabledforeground=colors['fg'],
+                             readonlybackground=colors['entry_bg'])
 
             # Checkbutton들
             for cb in [self.case_sensitive_cb, self.use_regex_cb, self.add_numbering_cb,
@@ -282,11 +293,13 @@ class BatchRenameGUI:
         self.tab_control.add(tab1, text="접두사/접미사")
 
         ttk.Label(tab1, text="접두사:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.prefix_entry = tk.Entry(tab1, width=30)
+        self.prefix_entry = tk.Entry(tab1, width=30, bg='#ffffff', fg='#000000',
+                                     insertbackground='#000000')
         self.prefix_entry.grid(row=0, column=1, padx=5, pady=5)
 
         ttk.Label(tab1, text="접미사:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.suffix_entry = tk.Entry(tab1, width=30)
+        self.suffix_entry = tk.Entry(tab1, width=30, bg='#ffffff', fg='#000000',
+                                     insertbackground='#000000')
         self.suffix_entry.grid(row=1, column=1, padx=5, pady=5)
 
         # 탭 2: 찾기/바꾸기
@@ -294,21 +307,27 @@ class BatchRenameGUI:
         self.tab_control.add(tab2, text="찾기/바꾸기")
 
         ttk.Label(tab2, text="찾을 텍스트:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.find_entry = tk.Entry(tab2, width=30)
+        self.find_entry = tk.Entry(tab2, width=30, bg='#ffffff', fg='#000000',
+                                   insertbackground='#000000')
         self.find_entry.grid(row=0, column=1, padx=5, pady=5)
 
         ttk.Label(tab2, text="바꿀 텍스트:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.replace_entry = tk.Entry(tab2, width=30)
+        self.replace_entry = tk.Entry(tab2, width=30, bg='#ffffff', fg='#000000',
+                                      insertbackground='#000000')
         self.replace_entry.grid(row=1, column=1, padx=5, pady=5)
 
         self.case_sensitive = tk.BooleanVar()
         self.case_sensitive_cb = tk.Checkbutton(tab2, text="대소문자 구분",
-                                               variable=self.case_sensitive)
+                                               variable=self.case_sensitive,
+                                               bg='#f0f0f0', fg='#000000',
+                                               selectcolor='#ffffff')
         self.case_sensitive_cb.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
 
         self.use_regex = tk.BooleanVar()
         self.use_regex_cb = tk.Checkbutton(tab2, text="정규표현식 사용",
-                                          variable=self.use_regex)
+                                          variable=self.use_regex,
+                                          bg='#f0f0f0', fg='#000000',
+                                          selectcolor='#ffffff')
         self.use_regex_cb.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
 
         # 탭 3: 순차 번호
@@ -318,17 +337,21 @@ class BatchRenameGUI:
         self.add_numbering = tk.BooleanVar()
         self.add_numbering_cb = tk.Checkbutton(tab3, text="순차 번호 추가",
                                               variable=self.add_numbering,
-                                              command=self.toggle_numbering)
+                                              command=self.toggle_numbering,
+                                              bg='#f0f0f0', fg='#000000',
+                                              selectcolor='#ffffff')
         self.add_numbering_cb.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
 
         ttk.Label(tab3, text="시작 번호:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.start_num = tk.Spinbox(tab3, from_=0, to=9999, width=10)
+        self.start_num = tk.Spinbox(tab3, from_=0, to=9999, width=10, bg='#ffffff',
+                                    fg='#000000', insertbackground='#000000')
         self.start_num.delete(0, tk.END)
         self.start_num.insert(0, "1")
         self.start_num.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
 
         ttk.Label(tab3, text="자릿수:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        self.padding = tk.Spinbox(tab3, from_=1, to=10, width=10)
+        self.padding = tk.Spinbox(tab3, from_=1, to=10, width=10, bg='#ffffff',
+                                  fg='#000000', insertbackground='#000000')
         self.padding.delete(0, tk.END)
         self.padding.insert(0, "3")
         self.padding.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
@@ -345,19 +368,27 @@ class BatchRenameGUI:
 
         self.case_change = tk.StringVar(value="변경 안 함")
         self.case_none_rb = tk.Radiobutton(tab4, text="변경 안 함",
-                                          variable=self.case_change, value="변경 안 함")
+                                          variable=self.case_change, value="변경 안 함",
+                                          bg='#f0f0f0', fg='#000000',
+                                          selectcolor='#ffffff')
         self.case_none_rb.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.case_upper_rb = tk.Radiobutton(tab4, text="모두 대문자",
-                                           variable=self.case_change, value="대문자")
+                                           variable=self.case_change, value="대문자",
+                                           bg='#f0f0f0', fg='#000000',
+                                           selectcolor='#ffffff')
         self.case_upper_rb.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.case_lower_rb = tk.Radiobutton(tab4, text="모두 소문자",
-                                           variable=self.case_change, value="소문자")
+                                           variable=self.case_change, value="소문자",
+                                           bg='#f0f0f0', fg='#000000',
+                                           selectcolor='#ffffff')
         self.case_lower_rb.grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.case_title_rb = tk.Radiobutton(tab4, text="첫 글자만 대문자",
-                                           variable=self.case_change, value="타이틀")
+                                           variable=self.case_change, value="타이틀",
+                                           bg='#f0f0f0', fg='#000000',
+                                           selectcolor='#ffffff')
         self.case_title_rb.grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
 
         # 탭 5: 특수문자 처리
@@ -366,17 +397,23 @@ class BatchRenameGUI:
 
         self.remove_spaces = tk.BooleanVar()
         self.remove_spaces_cb = tk.Checkbutton(tab5, text="공백 제거",
-                                              variable=self.remove_spaces)
+                                              variable=self.remove_spaces,
+                                              bg='#f0f0f0', fg='#000000',
+                                              selectcolor='#ffffff')
         self.remove_spaces_cb.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.replace_spaces = tk.BooleanVar()
         self.replace_spaces_cb = tk.Checkbutton(tab5, text="공백을 '_'로 변경",
-                                               variable=self.replace_spaces)
+                                               variable=self.replace_spaces,
+                                               bg='#f0f0f0', fg='#000000',
+                                               selectcolor='#ffffff')
         self.replace_spaces_cb.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.remove_special = tk.BooleanVar()
         self.remove_special_cb = tk.Checkbutton(tab5, text="특수문자 제거 (알파벳, 숫자, _, -, . 만 유지)",
-                                               variable=self.remove_special)
+                                               variable=self.remove_special,
+                                               bg='#f0f0f0', fg='#000000',
+                                               selectcolor='#ffffff')
         self.remove_special_cb.grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.tab_control.pack(expand=1, fill="both")
