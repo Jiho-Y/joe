@@ -35,3 +35,9 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# py2app
+*.app
+build/
+dist/
+*.spec

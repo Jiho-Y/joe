@@ -60,6 +60,7 @@ class BatchRenameGUI:
                 'entry_bg': '#ffffff',
                 'entry_fg': '#000000',
                 'frame_bg': '#f0f0f0',
+                'insert_bg': '#000000',
             },
             'dark': {
                 'bg': '#2b2b2b',
@@ -68,11 +69,12 @@ class BatchRenameGUI:
                 'select_fg': '#ffffff',
                 'tree_bg': '#1e1e1e',
                 'tree_fg': '#e0e0e0',
-                'highlight': '#4a4a00',
+                'highlight': '#4a4a2a',
                 'button_bg': '#3c3c3c',
                 'entry_bg': '#2d2d2d',
                 'entry_fg': '#e0e0e0',
                 'frame_bg': '#2b2b2b',
+                'insert_bg': '#ffffff',
             }
         }
 
@@ -84,7 +86,7 @@ class BatchRenameGUI:
         # 루트 윈도우 배경색
         self.root.configure(bg=colors['bg'])
 
-        # 스타일 설정
+        # ttk 스타일 설정
         style = ttk.Style()
 
         # 프레임 스타일
@@ -99,37 +101,17 @@ class BatchRenameGUI:
         style.configure('TButton', background=colors['button_bg'], foreground=colors['fg'])
         style.map('TButton', background=[('active', colors['select_bg'])])
 
-        # Entry 스타일
-        style.configure('TEntry', fieldbackground=colors['entry_bg'], foreground=colors['entry_fg'])
-        style.map('TEntry',
-                 fieldbackground=[('readonly', colors['entry_bg'])],
-                 foreground=[('readonly', colors['entry_fg'])])
-
-        # Combobox 스타일
+        # Combobox 스타일 (ttk는 유지하되 색상 수정)
         style.configure('TCombobox',
                        fieldbackground=colors['entry_bg'],
                        background=colors['entry_bg'],
-                       foreground=colors['entry_fg'])
+                       foreground=colors['entry_fg'],
+                       arrowcolor=colors['fg'])
         style.map('TCombobox',
                  fieldbackground=[('readonly', colors['entry_bg'])],
                  foreground=[('readonly', colors['entry_fg'])],
                  selectbackground=[('readonly', colors['select_bg'])],
                  selectforeground=[('readonly', colors['select_fg'])])
-
-        # Spinbox 스타일
-        style.configure('TSpinbox',
-                       fieldbackground=colors['entry_bg'],
-                       background=colors['entry_bg'],
-                       foreground=colors['entry_fg'])
-        style.map('TSpinbox',
-                 fieldbackground=[('readonly', colors['entry_bg'])],
-                 foreground=[('readonly', colors['entry_fg'])])
-
-        # 체크버튼 스타일
-        style.configure('TCheckbutton', background=colors['bg'], foreground=colors['fg'])
-
-        # 라디오버튼 스타일
-        style.configure('TRadiobutton', background=colors['bg'], foreground=colors['fg'])
 
         # Treeview 스타일
         style.configure('Treeview',
@@ -149,15 +131,51 @@ class BatchRenameGUI:
 
         # 변경된 항목 하이라이트
         if hasattr(self, 'tree'):
-            self.tree.tag_configure('changed', background=colors['highlight'])
+            self.tree.tag_configure('changed', background=colors['highlight'], foreground=colors['fg'])
             self.tree.tag_configure('manual', background=colors['select_bg'], foreground=colors['select_fg'])
 
         # Notebook 스타일
         style.configure('TNotebook', background=colors['bg'])
-        style.configure('TNotebook.Tab', background=colors['button_bg'], foreground=colors['fg'])
+        style.configure('TNotebook.Tab',
+                       background=colors['button_bg'],
+                       foreground=colors['fg'],
+                       padding=[10, 2])
         style.map('TNotebook.Tab',
                  background=[('selected', colors['select_bg'])],
-                 foreground=[('selected', colors['select_fg'])])
+                 foreground=[('selected', colors['select_fg'])],
+                 expand=[('selected', [1, 1, 1, 0])])
+
+        # tk 위젯들에 직접 색상 적용
+        if hasattr(self, 'prefix_entry'):
+            # Entry 위젯들
+            for entry in [self.prefix_entry, self.suffix_entry, self.find_entry, self.replace_entry]:
+                entry.config(bg=colors['entry_bg'], fg=colors['entry_fg'],
+                           insertbackground=colors['insert_bg'],
+                           selectbackground=colors['select_bg'],
+                           selectforeground=colors['select_fg'])
+
+            # Spinbox 위젯들
+            for spinbox in [self.start_num, self.padding]:
+                spinbox.config(bg=colors['entry_bg'], fg=colors['entry_fg'],
+                             insertbackground=colors['insert_bg'],
+                             selectbackground=colors['select_bg'],
+                             selectforeground=colors['select_fg'],
+                             buttonbackground=colors['button_bg'])
+
+            # Checkbutton들
+            for cb in [self.case_sensitive_cb, self.use_regex_cb, self.add_numbering_cb,
+                      self.remove_spaces_cb, self.replace_spaces_cb, self.remove_special_cb]:
+                cb.config(bg=colors['bg'], fg=colors['fg'],
+                         selectcolor=colors['entry_bg'],
+                         activebackground=colors['bg'],
+                         activeforeground=colors['fg'])
+
+            # Radiobutton들
+            for rb in [self.case_none_rb, self.case_upper_rb, self.case_lower_rb, self.case_title_rb]:
+                rb.config(bg=colors['bg'], fg=colors['fg'],
+                         selectcolor=colors['entry_bg'],
+                         activebackground=colors['bg'],
+                         activeforeground=colors['fg'])
 
     def toggle_theme(self):
         """테마 토글"""
@@ -250,8 +268,15 @@ class BatchRenameGUI:
         menubar.add_cascade(label="보기", menu=view_menu)
         view_menu.add_checkbutton(label="다크 모드", variable=self.dark_mode, command=self.toggle_theme)
 
-        # 키보드 단축키
+        # 키보드 단축키 (Mac)
         self.root.bind('<Command-z>', lambda e: self.undo_rename())
+        self.root.bind('<Command-w>', lambda e: self.root.quit())
+        self.root.bind('<Command-q>', lambda e: self.root.quit())
+
+        # macOS 메뉴바 통합
+        if self.root.tk.call('tk', 'windowingsystem') == 'aqua':
+            # macOS 앱 메뉴 설정
+            self.root.createcommand('::tk::mac::Quit', self.root.quit)
 
         # 상단 프레임: 폴더 선택
         top_frame = ttk.Frame(self.root, padding="10")
@@ -285,7 +310,7 @@ class BatchRenameGUI:
                  font=('', 9, 'italic')).grid(row=0, column=3, padx=20)
 
         # 중간 프레임: 변경 옵션
-        options_frame = ttk.LabelFrame(self.root, text="변경 옵션 (자동 미리보기)", padding="10")
+        options_frame = ttk.LabelFrame(self.root, text="변경 옵션 (실시간 미리보기)", padding="10")
         options_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E),
                           padx=10, pady=10)
 
@@ -297,11 +322,11 @@ class BatchRenameGUI:
         self.tab_control.add(tab1, text="접두사/접미사")
 
         ttk.Label(tab1, text="접두사:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.prefix_entry = ttk.Entry(tab1, width=30)
+        self.prefix_entry = tk.Entry(tab1, width=30)
         self.prefix_entry.grid(row=0, column=1, padx=5, pady=5)
 
         ttk.Label(tab1, text="접미사:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.suffix_entry = ttk.Entry(tab1, width=30)
+        self.suffix_entry = tk.Entry(tab1, width=30)
         self.suffix_entry.grid(row=1, column=1, padx=5, pady=5)
 
         # 탭 2: 찾기/바꾸기
@@ -309,42 +334,43 @@ class BatchRenameGUI:
         self.tab_control.add(tab2, text="찾기/바꾸기")
 
         ttk.Label(tab2, text="찾을 텍스트:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.find_entry = ttk.Entry(tab2, width=30)
+        self.find_entry = tk.Entry(tab2, width=30)
         self.find_entry.grid(row=0, column=1, padx=5, pady=5)
 
         ttk.Label(tab2, text="바꿀 텍스트:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.replace_entry = ttk.Entry(tab2, width=30)
+        self.replace_entry = tk.Entry(tab2, width=30)
         self.replace_entry.grid(row=1, column=1, padx=5, pady=5)
 
         self.case_sensitive = tk.BooleanVar()
-        ttk.Checkbutton(tab2, text="대소문자 구분",
-                       variable=self.case_sensitive).grid(row=2, column=1,
-                                                         padx=5, pady=5, sticky=tk.W)
+        self.case_sensitive_cb = tk.Checkbutton(tab2, text="대소문자 구분",
+                                               variable=self.case_sensitive)
+        self.case_sensitive_cb.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
 
         self.use_regex = tk.BooleanVar()
-        ttk.Checkbutton(tab2, text="정규표현식 사용",
-                       variable=self.use_regex).grid(row=3, column=1,
-                                                     padx=5, pady=5, sticky=tk.W)
+        self.use_regex_cb = tk.Checkbutton(tab2, text="정규표현식 사용",
+                                          variable=self.use_regex)
+        self.use_regex_cb.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
 
         # 탭 3: 순차 번호
         tab3 = ttk.Frame(self.tab_control)
         self.tab_control.add(tab3, text="순차 번호")
 
         self.add_numbering = tk.BooleanVar()
-        ttk.Checkbutton(tab3, text="순차 번호 추가",
-                       variable=self.add_numbering,
-                       command=self.toggle_numbering).grid(row=0, column=0,
-                                                           columnspan=2, padx=5,
-                                                           pady=5, sticky=tk.W)
+        self.add_numbering_cb = tk.Checkbutton(tab3, text="순차 번호 추가",
+                                              variable=self.add_numbering,
+                                              command=self.toggle_numbering)
+        self.add_numbering_cb.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
 
         ttk.Label(tab3, text="시작 번호:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.start_num = ttk.Spinbox(tab3, from_=0, to=9999, width=10)
-        self.start_num.set(1)
+        self.start_num = tk.Spinbox(tab3, from_=0, to=9999, width=10)
+        self.start_num.delete(0, tk.END)
+        self.start_num.insert(0, "1")
         self.start_num.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
 
         ttk.Label(tab3, text="자릿수:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        self.padding = ttk.Spinbox(tab3, from_=1, to=10, width=10)
-        self.padding.set(3)
+        self.padding = tk.Spinbox(tab3, from_=1, to=10, width=10)
+        self.padding.delete(0, tk.END)
+        self.padding.insert(0, "3")
         self.padding.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
 
         ttk.Label(tab3, text="위치:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
@@ -358,33 +384,40 @@ class BatchRenameGUI:
         self.tab_control.add(tab4, text="대소문자")
 
         self.case_change = tk.StringVar(value="변경 안 함")
-        ttk.Radiobutton(tab4, text="변경 안 함", variable=self.case_change,
-                       value="변경 안 함").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Radiobutton(tab4, text="모두 대문자", variable=self.case_change,
-                       value="대문자").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Radiobutton(tab4, text="모두 소문자", variable=self.case_change,
-                       value="소문자").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Radiobutton(tab4, text="첫 글자만 대문자", variable=self.case_change,
-                       value="타이틀").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
+        self.case_none_rb = tk.Radiobutton(tab4, text="변경 안 함",
+                                          variable=self.case_change, value="변경 안 함")
+        self.case_none_rb.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.case_upper_rb = tk.Radiobutton(tab4, text="모두 대문자",
+                                           variable=self.case_change, value="대문자")
+        self.case_upper_rb.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.case_lower_rb = tk.Radiobutton(tab4, text="모두 소문자",
+                                           variable=self.case_change, value="소문자")
+        self.case_lower_rb.grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+
+        self.case_title_rb = tk.Radiobutton(tab4, text="첫 글자만 대문자",
+                                           variable=self.case_change, value="타이틀")
+        self.case_title_rb.grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
 
         # 탭 5: 특수문자 처리
         tab5 = ttk.Frame(self.tab_control)
         self.tab_control.add(tab5, text="특수문자")
 
         self.remove_spaces = tk.BooleanVar()
-        ttk.Checkbutton(tab5, text="공백 제거",
-                       variable=self.remove_spaces).grid(row=0, column=0,
-                                                         padx=5, pady=5, sticky=tk.W)
+        self.remove_spaces_cb = tk.Checkbutton(tab5, text="공백 제거",
+                                              variable=self.remove_spaces)
+        self.remove_spaces_cb.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.replace_spaces = tk.BooleanVar()
-        ttk.Checkbutton(tab5, text="공백을 '_'로 변경",
-                       variable=self.replace_spaces).grid(row=1, column=0,
-                                                          padx=5, pady=5, sticky=tk.W)
+        self.replace_spaces_cb = tk.Checkbutton(tab5, text="공백을 '_'로 변경",
+                                               variable=self.replace_spaces)
+        self.replace_spaces_cb.grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.remove_special = tk.BooleanVar()
-        ttk.Checkbutton(tab5, text="특수문자 제거 (알파벳, 숫자, _, -, . 만 유지)",
-                       variable=self.remove_special).grid(row=2, column=0,
-                                                          padx=5, pady=5, sticky=tk.W)
+        self.remove_special_cb = tk.Checkbutton(tab5, text="특수문자 제거 (알파벳, 숫자, _, -, . 만 유지)",
+                                               variable=self.remove_special)
+        self.remove_special_cb.grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
 
         self.tab_control.pack(expand=1, fill="both")
 
@@ -846,8 +879,10 @@ class BatchRenameGUI:
         self.case_sensitive.set(False)
         self.use_regex.set(False)
         self.add_numbering.set(False)
-        self.start_num.set(1)
-        self.padding.set(3)
+        self.start_num.delete(0, tk.END)
+        self.start_num.insert(0, "1")
+        self.padding.delete(0, tk.END)
+        self.padding.insert(0, "3")
         self.number_position.set("뒤")
         self.case_change.set("변경 안 함")
         self.remove_spaces.set(False)

@@ -25,6 +25,8 @@
 
 ## 설치 방법
 
+### 방법 1: 터미널에서 직접 실행
+
 Python 3가 필요합니다. 맥에는 기본적으로 Python이 설치되어 있습니다.
 
 ```bash
@@ -34,20 +36,35 @@ cd joe
 
 # 실행 권한 부여
 chmod +x batch_rename_gui.py
-```
 
-## 사용 방법
-
-### 터미널에서 실행
-
-```bash
+# 실행
 python3 batch_rename_gui.py
 ```
 
-또는
+### 방법 2: Mac 앱(.app) 형태로 설치 (권장)
 
 ```bash
-./batch_rename_gui.py
+# py2app 설치
+pip3 install py2app
+
+# Mac 앱 빌드
+python3 setup.py py2app
+
+# dist 폴더에 생성된 .app 파일을 Applications 폴더로 복사
+cp -r dist/BatchRenameGUI.app /Applications/
+```
+
+이제 **Spotlight(Cmd+Space)**에서 "파일 이름 일괄 변경"을 검색하여 실행할 수 있습니다!
+
+## 사용 방법
+
+### Mac 앱으로 실행
+- Spotlight에서 "파일 이름 일괄 변경" 검색 후 실행
+- Applications 폴더에서 더블클릭
+
+### 터미널에서 실행
+```bash
+python3 batch_rename_gui.py
 ```
 
 ### 사용 순서
@@ -64,9 +81,11 @@ python3 batch_rename_gui.py
 5. **실행** 버튼으로 실제 파일 이름 변경
 6. (필요시) **실행 취소** 버튼으로 되돌리기
 
-### 키보드 단축키
+### 키보드 단축키 (Mac)
 
 - `Cmd+Z`: 실행 취소
+- `Cmd+W`: 창 닫기
+- `Cmd+Q`: 앱 종료
 - 메뉴바의 다른 단축키들도 사용 가능
 
 ## 사용 예시
@@ -194,6 +213,23 @@ brew install python-tk@3.11
 ```bash
 python3 batch_rename_gui.py
 ```
+
+### Mac 앱 빌드 오류
+
+py2app 빌드 시 오류가 발생하면:
+
+```bash
+# 기존 빌드 정리
+rm -rf build dist
+
+# 다시 빌드
+python3 setup.py py2app
+```
+
+### 다크모드가 제대로 작동하지 않을 때
+
+프로그램은 macOS의 네이티브 위젯과 함께 작동하도록 최적화되어 있습니다.
+보기 → 다크 모드를 토글하면 모든 위젯에 테마가 즉시 적용됩니다.
 
 ## 라이선스
 
