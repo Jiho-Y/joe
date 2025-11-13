@@ -676,10 +676,17 @@ class PaperSearchFilterGUI:
         ttk.Button(settings_frame, text="저장", command=self.save_api_key, width=8).grid(row=0, column=3, pady=5, padx=5)
         ttk.Label(settings_frame, text="(자동 로드됨)", font=('', 8)).grid(row=0, column=4, sticky='w')
 
-        # 키워드 입력
-        ttk.Label(settings_frame, text="검색 키워드:").grid(row=1, column=0, sticky='w', pady=5)
-        self.search_query_entry = ttk.Entry(settings_frame, width=50)
-        self.search_query_entry.grid(row=1, column=1, columnspan=2, sticky='ew', pady=5, padx=5)
+        # 키워드 입력 (여러 줄 지원)
+        ttk.Label(settings_frame, text="검색 키워드:").grid(row=1, column=0, sticky='nw', pady=5)
+
+        # 키워드 입력 프레임
+        keyword_frame = ttk.Frame(settings_frame)
+        keyword_frame.grid(row=1, column=1, columnspan=2, sticky='ew', pady=5, padx=5)
+
+        self.search_query_text = scrolledtext.ScrolledText(keyword_frame, height=3, width=50, wrap=tk.WORD)
+        self.search_query_text.pack(fill='both', expand=True)
+
+        ttk.Label(keyword_frame, text="(한 줄에 하나씩 입력하여 순차 검색)", font=('', 8)).pack(anchor='w')
 
         # 결과 개수
         ttk.Label(settings_frame, text="결과 개수:").grid(row=2, column=0, sticky='w', pady=5)
@@ -865,10 +872,18 @@ class PaperSearchFilterGUI:
         self.log_search_status(f"진행 중: {current}/{total} 논문")
 
     def search_thread(self):
-        """검색 스레드 (백그라운드 실행)"""
-        query = self.search_query_entry.get().strip()
+        """검색 스레드 (백그라운드 실행) - 복수 키워드 순차 검색 지원"""
+        # 키워드 파싱 (줄바꿈으로 구분)
+        query_text = self.search_query_text.get("1.0", tk.END).strip()
 
-        if not query:
+        if not query_text:
+            messagebox.showwarning("경고", "검색 키워드를 입력해주세요.")
+            return
+
+        # 줄바꿈으로 키워드 분리
+        queries = [q.strip() for q in query_text.split('\n') if q.strip()]
+
+        if not queries:
             messagebox.showwarning("경고", "검색 키워드를 입력해주세요.")
             return
 
@@ -893,42 +908,76 @@ class PaperSearchFilterGUI:
             year_from = int(self.year_from_var.get()) if self.year_from_var.get().strip() else None
             year_to = int(self.year_to_var.get()) if self.year_to_var.get().strip() else None
 
+            # 복수 키워드 검색
             self.log_search_status(f"\n{'='*60}")
-            self.log_search_status(f"검색 키워드: '{query}'")
-            self.log_search_status(f"최대 결과 수: {limit}편")
-            if year_from or year_to:
-                year_range = f"{year_from or '?'} ~ {year_to or '?'}"
-                self.log_search_status(f"연도 범위: {year_range}")
+            self.log_search_status(f"📝 총 {len(queries)}개의 키워드 순차 검색")
             self.log_search_status(f"{'='*60}\n")
 
-            # 검색 실행
-            papers = api.search_papers(
-                query=query,
-                limit=limit,
-                year_from=year_from,
-                year_to=year_to,
-                progress_callback=self.update_progress,
-                stop_flag=self.stop_search_flag
-            )
+            all_papers = []
+            total_found = 0
 
-            # 중단 확인
+            for idx, query in enumerate(queries, 1):
+                # 중단 확인
+                if self.stop_search_flag and self.stop_search_flag.is_set():
+                    self.log_search_status(f"\n🛑 검색이 중단되었습니다. ({idx-1}/{len(queries)} 완료)")
+                    break
+
+                self.log_search_status(f"\n{'='*60}")
+                self.log_search_status(f"[{idx}/{len(queries)}] 검색 중: '{query}'")
+                self.log_search_status(f"최대 결과 수: {limit}편")
+                if year_from or year_to:
+                    year_range = f"{year_from or '?'} ~ {year_to or '?'}"
+                    self.log_search_status(f"연도 범위: {year_range}")
+                self.log_search_status(f"{'='*60}\n")
+
+                # 검색 실행
+                papers = api.search_papers(
+                    query=query,
+                    limit=limit,
+                    year_from=year_from,
+                    year_to=year_to,
+                    progress_callback=self.update_progress,
+                    stop_flag=self.stop_search_flag
+                )
+
+                # 중단 확인
+                if self.stop_search_flag and self.stop_search_flag.is_set():
+                    self.log_search_status(f"\n🛑 [{idx}/{len(queries)}] 검색이 중단되었습니다.")
+                    break
+
+                if papers:
+                    self.log_search_status(f"✓ [{idx}/{len(queries)}] {len(papers)}편 검색 완료")
+                    all_papers.extend(papers)
+                    total_found += len(papers)
+                else:
+                    self.log_search_status(f"⚠️ [{idx}/{len(queries)}] 검색 결과 없음")
+
+            # 중단으로 종료된 경우
             if self.stop_search_flag and self.stop_search_flag.is_set():
-                self.log_search_status("\n🛑 검색이 중단되었습니다.")
-                messagebox.showinfo("중단", "검색이 중단되었습니다.")
-                return
+                if all_papers:
+                    proceed = messagebox.askyesno("중단",
+                        f"검색이 중단되었습니다.\n\n"
+                        f"지금까지 검색된 {len(all_papers)}편의 논문을 저장하시겠습니까?")
+                    if not proceed:
+                        self.log_search_status("\n❌ 저장 취소됨")
+                        return
+                else:
+                    messagebox.showinfo("중단", "검색이 중단되었습니다.\n검색 결과가 없습니다.")
+                    return
 
-            if not papers:
-                self.log_search_status("\n❌ 검색 결과가 없습니다.")
+            if not all_papers:
+                self.log_search_status(f"\n❌ 모든 키워드에서 검색 결과가 없습니다.")
                 messagebox.showinfo("알림", "검색 결과가 없습니다.")
                 return
 
             self.log_search_status(f"\n{'='*60}")
             self.log_search_status(f"📊 데이터 처리 중...")
             self.log_search_status(f"{'='*60}")
+            self.log_search_status(f"✓ 총 검색된 논문: {total_found}편 ({len(queries)}개 키워드)")
 
             # DataFrame 변환
-            df = api.format_papers_for_export(papers)
-            self.log_search_status(f"✓ {len(papers)}편의 논문 데이터 변환 완료")
+            df = api.format_papers_for_export(all_papers)
+            self.log_search_status(f"✓ 논문 데이터 변환 완료")
 
             # 중복 제거
             df_unique, removed_count = SemanticScholarAPI.remove_duplicates(df)
@@ -952,10 +1001,14 @@ class PaperSearchFilterGUI:
 
             messagebox.showinfo("완료",
                 f"검색 완료!\n\n"
-                f"검색된 논문: {len(papers)}편\n"
+                f"검색 키워드: {len(queries)}개\n"
+                f"검색된 논문: {total_found}편\n"
                 f"중복 제거: {removed_count}편\n"
                 f"최종 저장: {len(df_unique)}편\n\n"
                 f"{save_path}")
+
+            # 자동으로 엑셀 뷰어에서 파일 열기
+            self.auto_load_excel(save_path)
 
         except Exception as e:
             self.log_search_status(f"\n오류 발생: {str(e)}")
@@ -1012,6 +1065,33 @@ class PaperSearchFilterGUI:
 
         thread = threading.Thread(target=test_thread, daemon=True)
         thread.start()
+
+    def auto_load_excel(self, file_path):
+        """검색 완료 후 자동으로 엑셀 파일 열기"""
+        try:
+            # 엑셀 탭으로 전환
+            self.notebook.select(self.excel_tab)
+
+            # 파일 경로 설정
+            self.excel_file_var.set(file_path)
+
+            # 파일 로드
+            file_ext = Path(file_path).suffix.lower()
+            if file_ext == '.csv':
+                self.current_df = pd.read_csv(file_path, encoding='utf-8-sig')
+            else:
+                self.current_df = pd.read_excel(file_path, engine='openpyxl')
+
+            self.current_excel_path = file_path
+
+            # Treeview 업데이트
+            self.refresh_excel_view()
+
+            self.log_search_status(f"\n✅ 엑셀 뷰어에서 파일을 열었습니다.")
+
+        except Exception as e:
+            self.log_search_status(f"\n⚠️ 엑셀 자동 열기 실패: {str(e)}")
+            # 자동 열기 실패는 치명적이지 않으므로 에러 메시지만 로깅
 
     def apply_filter(self):
         """필터링 적용"""
@@ -1138,10 +1218,12 @@ class PaperSearchFilterGUI:
         tools_frame = ttk.Frame(self.excel_tab)
         tools_frame.pack(fill='x', padx=10, pady=5)
 
+        ttk.Button(tools_frame, text="🔍 검색 (⌘F)", command=self.show_excel_search, width=15).pack(side='left', padx=5)
         ttk.Button(tools_frame, text="선택 행 삭제", command=self.delete_selected_rows, width=15).pack(side='left', padx=5)
         ttk.Button(tools_frame, text="변경사항 저장", command=self.save_excel_changes, width=15).pack(side='left', padx=5)
         ttk.Button(tools_frame, text="다른 이름으로 저장", command=self.save_excel_as, width=18).pack(side='left', padx=5)
         ttk.Button(tools_frame, text="새로고침", command=self.refresh_excel_view, width=12).pack(side='left', padx=5)
+        ttk.Button(tools_frame, text="컬럼 너비 자동조정", command=self.auto_fit_columns, width=18).pack(side='left', padx=5)
 
         # 통계 레이블
         self.excel_stats_label = ttk.Label(tools_frame, text="", font=('', 9))
@@ -1172,6 +1254,19 @@ class PaperSearchFilterGUI:
 
         # 더블클릭으로 셀 편집
         self.excel_tree.bind('<Double-1>', self.on_cell_double_click)
+
+        # 키보드 단축키 바인딩
+        # Mac의 경우 Command+F, Windows/Linux의 경우 Ctrl+F
+        self.excel_tree.bind('<Command-f>', lambda e: self.show_excel_search())
+        self.excel_tree.bind('<Control-f>', lambda e: self.show_excel_search())
+
+        # 선택 변경 이벤트 바인딩
+        self.excel_tree.bind('<<TreeviewSelect>>', self.on_excel_selection_change)
+
+        # 검색 관련 변수 초기화
+        self.excel_search_results = []
+        self.excel_search_index = -1
+        self.excel_search_window = None
 
     def browse_excel_file(self):
         """Excel 파일 찾아보기"""
@@ -1349,6 +1444,189 @@ class PaperSearchFilterGUI:
                 messagebox.showinfo("완료", f"파일이 저장되었습니다:\n{filename}")
             except Exception as e:
                 messagebox.showerror("오류", f"저장 중 오류가 발생했습니다:\n{str(e)}")
+
+    def on_excel_selection_change(self, event):
+        """엑셀 트리뷰 선택 변경 시 호출"""
+        if self.current_df is None:
+            return
+
+        selected_count = len(self.excel_tree.selection())
+        total_count = len(self.current_df)
+
+        if selected_count > 0:
+            self.excel_stats_label.config(text=f"총 {total_count}개 행 (선택: {selected_count}개)")
+        else:
+            self.excel_stats_label.config(text=f"총 {total_count}개 행")
+
+    def auto_fit_columns(self):
+        """컬럼 너비 자동 조정"""
+        if self.current_df is None:
+            messagebox.showwarning("경고", "먼저 파일을 로드해주세요.")
+            return
+
+        try:
+            for col in self.excel_tree['columns']:
+                # 헤더 길이
+                max_width = len(str(col)) * 10
+
+                # 데이터 길이 확인
+                for item in self.excel_tree.get_children():
+                    col_idx = self.excel_tree['columns'].index(col)
+                    value = str(self.excel_tree.item(item, 'values')[col_idx])
+                    max_width = max(max_width, len(value) * 8)
+
+                # 최대 너비 제한
+                max_width = min(max_width, 400)
+                self.excel_tree.column(col, width=max_width)
+
+            messagebox.showinfo("완료", "컬럼 너비가 자동 조정되었습니다.")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"컬럼 너비 조정 실패:\n{str(e)}")
+
+    def show_excel_search(self):
+        """엑셀 검색 창 표시"""
+        if self.current_df is None:
+            messagebox.showwarning("경고", "먼저 파일을 로드해주세요.")
+            return
+
+        # 이미 검색 창이 열려 있으면 포커스만 이동
+        if self.excel_search_window and self.excel_search_window.winfo_exists():
+            self.excel_search_window.lift()
+            self.excel_search_window.focus_force()
+            return
+
+        # 새 검색 창 생성
+        self.excel_search_window = tk.Toplevel(self.root)
+        self.excel_search_window.title("Excel 검색")
+        self.excel_search_window.geometry("500x200")
+        self.excel_search_window.resizable(False, False)
+
+        # 검색어 입력
+        input_frame = ttk.LabelFrame(self.excel_search_window, text="검색 조건", padding=10)
+        input_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(input_frame, text="검색어:").grid(row=0, column=0, sticky='w', pady=5)
+        self.excel_search_entry = ttk.Entry(input_frame, width=40)
+        self.excel_search_entry.grid(row=0, column=1, sticky='ew', pady=5, padx=5)
+        self.excel_search_entry.focus()
+
+        # 엔터키로 검색
+        self.excel_search_entry.bind('<Return>', lambda e: self.perform_excel_search())
+
+        # 검색 옵션
+        ttk.Label(input_frame, text="대상 컬럼:").grid(row=1, column=0, sticky='w', pady=5)
+        self.excel_search_column_var = tk.StringVar(value="전체")
+        columns = ["전체"] + list(self.excel_tree['columns'])
+        ttk.Combobox(input_frame, textvariable=self.excel_search_column_var,
+                     values=columns, width=37, state='readonly').grid(row=1, column=1, sticky='ew', pady=5, padx=5)
+
+        self.excel_case_sensitive_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(input_frame, text="대소문자 구분",
+                       variable=self.excel_case_sensitive_var).grid(row=2, column=1, sticky='w', pady=5, padx=5)
+
+        input_frame.columnconfigure(1, weight=1)
+
+        # 버튼 프레임
+        button_frame = ttk.Frame(self.excel_search_window)
+        button_frame.pack(fill='x', padx=10, pady=5)
+
+        ttk.Button(button_frame, text="🔍 검색", command=self.perform_excel_search, width=15).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="⬇ 다음", command=self.find_next_excel_result, width=15).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="⬆ 이전", command=self.find_prev_excel_result, width=15).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="닫기", command=self.excel_search_window.destroy, width=15).pack(side='left', padx=5)
+
+        # 결과 레이블
+        self.excel_search_result_label = ttk.Label(self.excel_search_window, text="", font=('', 9))
+        self.excel_search_result_label.pack(pady=5)
+
+    def perform_excel_search(self):
+        """엑셀 검색 실행"""
+        if self.current_df is None:
+            return
+
+        search_text = self.excel_search_entry.get().strip()
+        if not search_text:
+            messagebox.showwarning("경고", "검색어를 입력해주세요.")
+            return
+
+        target_column = self.excel_search_column_var.get()
+        case_sensitive = self.excel_case_sensitive_var.get()
+
+        # 검색 결과 초기화
+        self.excel_search_results = []
+
+        # 검색어 처리
+        search_pattern = search_text if case_sensitive else search_text.lower()
+
+        # 모든 행 검색
+        for item_id in self.excel_tree.get_children():
+            values = self.excel_tree.item(item_id, 'values')
+
+            # 검색 대상 컬럼 결정
+            if target_column == "전체":
+                search_targets = enumerate(values)
+            else:
+                col_idx = self.excel_tree['columns'].index(target_column)
+                search_targets = [(col_idx, values[col_idx])]
+
+            # 각 셀에서 검색
+            for col_idx, value in search_targets:
+                value_str = str(value) if not case_sensitive else str(value)
+                compare_str = value_str if case_sensitive else value_str.lower()
+
+                if search_pattern in compare_str:
+                    self.excel_search_results.append((item_id, col_idx))
+
+        # 결과 표시
+        if self.excel_search_results:
+            self.excel_search_index = 0
+            self.highlight_excel_search_result()
+            self.excel_search_result_label.config(
+                text=f"총 {len(self.excel_search_results)}개 발견 (1/{len(self.excel_search_results)})"
+            )
+        else:
+            self.excel_search_result_label.config(text="검색 결과가 없습니다.")
+            messagebox.showinfo("검색 완료", "검색 결과가 없습니다.")
+
+    def find_next_excel_result(self):
+        """다음 검색 결과로 이동"""
+        if not self.excel_search_results:
+            messagebox.showinfo("알림", "먼저 검색을 실행해주세요.")
+            return
+
+        self.excel_search_index = (self.excel_search_index + 1) % len(self.excel_search_results)
+        self.highlight_excel_search_result()
+        self.excel_search_result_label.config(
+            text=f"총 {len(self.excel_search_results)}개 발견 ({self.excel_search_index + 1}/{len(self.excel_search_results)})"
+        )
+
+    def find_prev_excel_result(self):
+        """이전 검색 결과로 이동"""
+        if not self.excel_search_results:
+            messagebox.showinfo("알림", "먼저 검색을 실행해주세요.")
+            return
+
+        self.excel_search_index = (self.excel_search_index - 1) % len(self.excel_search_results)
+        self.highlight_excel_search_result()
+        self.excel_search_result_label.config(
+            text=f"총 {len(self.excel_search_results)}개 발견 ({self.excel_search_index + 1}/{len(self.excel_search_results)})"
+        )
+
+    def highlight_excel_search_result(self):
+        """현재 검색 결과 하이라이트"""
+        if not self.excel_search_results or self.excel_search_index < 0:
+            return
+
+        # 이전 선택 해제
+        for item in self.excel_tree.selection():
+            self.excel_tree.selection_remove(item)
+
+        # 현재 결과 선택 및 스크롤
+        item_id, col_idx = self.excel_search_results[self.excel_search_index]
+        self.excel_tree.selection_set(item_id)
+        self.excel_tree.focus(item_id)
+        self.excel_tree.see(item_id)
 
 
 def main():
