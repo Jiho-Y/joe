@@ -18,17 +18,158 @@ import threading
 
 
 class SemanticScholarAPI:
-    """Semantic Scholar API 검색 클래스"""
+    """Semantic Scholar API 검색 클래스 (견고한 에러 처리 포함)"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, log_callback=None):
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0'
+            'User-Agent': 'Mozilla/5.0 (Academic Research Tool)'
         }
+        self.api_key = api_key
+        self.log_callback = log_callback
 
         # API 키가 있으면 헤더에 추가
         if api_key:
             self.headers['x-api-key'] = api_key
+
+    def log(self, message):
+        """로그 메시지 출력"""
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
+
+    def exponential_backoff_wait(self, attempt, base_wait=1, max_wait=300):
+        """
+        지수 백오프 대기
+
+        Args:
+            attempt: 현재 시도 횟수 (0부터 시작)
+            base_wait: 기본 대기 시간 (초)
+            max_wait: 최대 대기 시간 (초) - 기본 5분
+        """
+        wait_time = min(base_wait * (2 ** attempt), max_wait)
+        self.log(f"⏳ 재시도 대기 중... ({wait_time}초)")
+        time.sleep(wait_time)
+        return wait_time
+
+    def search_single_batch(
+        self,
+        query: str,
+        limit: int = 100,
+        offset: int = 0,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        max_retries: int = 10
+    ) -> Optional[Dict]:
+        """
+        단일 배치 검색 (재시도 로직 포함)
+
+        Args:
+            query: 검색 키워드
+            limit: 한 번에 가져올 결과 수 (최대 100)
+            offset: 시작 위치
+            year_from: 시작 연도
+            year_to: 종료 연도
+            max_retries: 재시도 최대 횟수
+
+        Returns:
+            dict: {'data': 논문 리스트, 'total': 전체 결과 수} 또는 None
+        """
+        params = {
+            'query': query,
+            'limit': min(limit, 100),
+            'offset': offset,
+            'fields': 'paperId,title,authors,year,venue,citationCount,abstract,externalIds,publicationDate,url'
+        }
+
+        # 연도 범위 설정
+        if year_from and year_to:
+            params['year'] = f"{year_from}-{year_to}"
+        elif year_from:
+            params['year'] = f"{year_from}-"
+        elif year_to:
+            params['year'] = f"-{year_to}"
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    self.log(f"📌 재시도 {attempt + 1}/{max_retries} (offset={offset})")
+
+                response = requests.get(
+                    f"{self.base_url}/paper/search",
+                    params=params,
+                    headers=self.headers,
+                    timeout=300  # 5분 타임아웃
+                )
+
+                # Rate limit 처리 (429 에러)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    self.log(f"⚠️ Rate Limit 초과 - {retry_after}초 후 재시도 ({attempt + 1}/{max_retries})")
+
+                    if attempt < max_retries - 1:
+                        # 서버 권장 시간과 지수 백오프 중 큰 값 사용
+                        exponential_wait = 2 ** attempt
+                        wait_time = max(retry_after, exponential_wait)
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        self.log("❌ 최대 재시도 횟수 초과")
+                        return None
+
+                # 서버 오류 (500+)
+                if response.status_code >= 500:
+                    self.log(f"⚠️ 서버 오류 ({response.status_code}) - 재시도 {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        self.exponential_backoff_wait(attempt, base_wait=10, max_wait=300)
+                        continue
+                    else:
+                        return None
+
+                # HTTP 오류 체크
+                response.raise_for_status()
+
+                results = response.json()
+
+                if 'data' not in results:
+                    self.log("⚠️ API 응답 형식 오류")
+                    if attempt < max_retries - 1:
+                        self.exponential_backoff_wait(attempt, base_wait=2, max_wait=300)
+                        continue
+                    return None
+
+                return results
+
+            except requests.exceptions.Timeout:
+                self.log(f"⚠️ 타임아웃 오류 ({attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    self.exponential_backoff_wait(attempt, base_wait=5, max_wait=300)
+                else:
+                    return None
+
+            except requests.exceptions.HTTPError as http_err:
+                self.log(f"⚠️ HTTP 오류: {http_err} ({attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    self.exponential_backoff_wait(attempt, base_wait=5, max_wait=300)
+                else:
+                    return None
+
+            except requests.exceptions.RequestException as req_err:
+                self.log(f"⚠️ 네트워크 오류: {req_err} ({attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    self.exponential_backoff_wait(attempt, base_wait=3, max_wait=300)
+                else:
+                    return None
+
+            except Exception as e:
+                self.log(f"⚠️ 알 수 없는 오류: {str(e)} ({attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    self.exponential_backoff_wait(attempt, base_wait=5, max_wait=300)
+                else:
+                    return None
+
+        return None
 
     def search_papers(
         self,
@@ -39,7 +180,7 @@ class SemanticScholarAPI:
         progress_callback=None
     ) -> List[Dict]:
         """
-        논문 검색
+        논문 검색 (Pagination 지원)
 
         Args:
             query: 검색 키워드
@@ -51,69 +192,92 @@ class SemanticScholarAPI:
         Returns:
             논문 정보 리스트
         """
-        papers = []
+        all_papers = []
         offset = 0
-        batch_size = 100  # API 한 번에 최대 100개
+        batch_size = 100
 
-        fields = "paperId,title,authors,year,venue,citationCount,abstract,externalIds,publicationDate"
+        self.log(f"🔍 '{query}' 검색 시작...")
 
-        while len(papers) < limit:
-            try:
-                params = {
-                    'query': query,
-                    'offset': offset,
-                    'limit': min(batch_size, limit - len(papers)),
-                    'fields': fields
-                }
+        # 첫 번째 요청으로 전체 결과 수 확인
+        first_result = self.search_single_batch(
+            query=query,
+            limit=batch_size,
+            offset=0,
+            year_from=year_from,
+            year_to=year_to
+        )
 
-                if year_from:
-                    params['year'] = f"{year_from}-"
-                if year_to:
-                    if year_from:
-                        params['year'] = f"{year_from}-{year_to}"
-                    else:
-                        params['year'] = f"-{year_to}"
+        if first_result is None:
+            self.log(f"❌ '{query}' 검색 실패")
+            return []
 
-                response = requests.get(
-                    f"{self.base_url}/paper/search",
-                    params=params,
-                    headers=self.headers,
-                    timeout=30
-                )
+        total_available = first_result.get('total', 0)
+        papers = first_result.get('data', [])
 
-                if response.status_code == 200:
-                    data = response.json()
-                    batch_papers = data.get('data', [])
+        if not papers:
+            self.log(f"⚠️ '{query}' 검색 결과 없음")
+            return []
 
-                    if not batch_papers:
-                        break
+        all_papers.extend(papers)
+        self.log(f"✓ 배치 1: {len(papers)}개 수집 (전체 약 {total_available}개 존재)")
 
-                    papers.extend(batch_papers)
-                    offset += len(batch_papers)
+        if progress_callback:
+            progress_callback(len(all_papers), limit)
 
-                    if progress_callback:
-                        progress_callback(len(papers), limit)
+        # 100개 미만이거나 원하는 개수를 달성하면 종료
+        if len(papers) < batch_size or len(all_papers) >= limit:
+            self.log(f"✓ 검색 완료: 총 {len(all_papers)}개")
+            return all_papers[:limit]
 
-                    # API rate limit 준수
-                    time.sleep(1)
+        # Pagination 계속
+        target = min(limit, total_available)
+        batch_num = 2
 
-                    # 더 이상 결과가 없으면 종료
-                    if len(batch_papers) < batch_size:
-                        break
+        while len(all_papers) < target:
+            offset += batch_size
+            remaining = target - len(all_papers)
+            current_limit = min(batch_size, remaining)
 
-                elif response.status_code == 429:
-                    # Rate limit 초과시 대기
-                    time.sleep(5)
-                    continue
-                else:
-                    print(f"API 오류: {response.status_code}")
-                    break
+            # API 키 없으면 Rate Limit 준수 (1.2초 대기)
+            if not self.api_key:
+                self.log(f"⏳ Rate Limit 준수를 위해 1.2초 대기...")
+                time.sleep(1.2)
 
-            except Exception as e:
-                print(f"검색 중 오류 발생: {str(e)}")
+            self.log(f"📥 배치 {batch_num}: offset={offset}, limit={current_limit}")
+
+            result = self.search_single_batch(
+                query=query,
+                limit=current_limit,
+                offset=offset,
+                year_from=year_from,
+                year_to=year_to
+            )
+
+            if result is None:
+                self.log(f"⚠️ 배치 {batch_num} 검색 실패 (계속 진행)")
                 break
 
-        return papers[:limit]
+            papers = result.get('data', [])
+
+            if not papers:
+                self.log(f"✓ 더 이상 결과 없음")
+                break
+
+            all_papers.extend(papers)
+            self.log(f"✓ 배치 {batch_num}: {len(papers)}개 수집 (누적: {len(all_papers)}개)")
+
+            if progress_callback:
+                progress_callback(len(all_papers), limit)
+
+            batch_num += 1
+
+            # 전체 결과를 모두 가져왔으면 종료
+            if len(all_papers) >= total_available:
+                self.log(f"✓ 전체 결과 수집 완료")
+                break
+
+        self.log(f"✅ '{query}' 검색 완료: 총 {len(all_papers)}개 수집")
+        return all_papers[:limit]
 
     def format_papers_for_export(self, papers: List[Dict]) -> pd.DataFrame:
         """
@@ -125,35 +289,77 @@ class SemanticScholarAPI:
         for paper in papers:
             # 저자 정보 포맷팅
             authors = paper.get('authors', [])
-            author_names = ', '.join([a.get('name', '') for a in authors])
+            if authors:
+                author_names = ', '.join([a.get('name', '') for a in authors])
+            else:
+                author_names = 'No authors listed'
 
             # DOI 추출
             external_ids = paper.get('externalIds', {})
-            doi = external_ids.get('DOI', '') if external_ids else ''
+            doi = external_ids.get('DOI', 'N/A') if external_ids else 'N/A'
 
             # 출판일 (publicationDate가 있으면 사용, 없으면 year 사용)
             pub_date = paper.get('publicationDate', '')
             if not pub_date and paper.get('year'):
                 pub_date = str(paper.get('year'))
+            if not pub_date:
+                pub_date = 'N/A'
+
+            # Abstract 길이 체크 (Excel 셀 최대 길이 32767)
+            abstract = paper.get('abstract', 'No abstract available')
+            if abstract and len(abstract) > 32767:
+                abstract = abstract[:32760] + "..."
 
             formatted_data.append({
                 'Publication Date': pub_date,
-                'Title': paper.get('title', ''),
+                'Title': paper.get('title', 'No title'),
                 'Authors': author_names,
-                'Journal': paper.get('venue', ''),
+                'Journal': paper.get('venue', 'N/A'),
                 'Citation Count': paper.get('citationCount', 0),
                 'DOI': doi,
-                'Abstract': paper.get('abstract', '')
+                'Abstract': abstract,
+                'Paper ID': paper.get('paperId', 'N/A'),  # 중복 제거용
+                'URL': paper.get('url', 'N/A')
             })
 
         df = pd.DataFrame(formatted_data)
 
-        # 컬럼 순서 확정: 출판일, 제목, 저자, 저널, 인용수, DOI, 초록
+        # 컬럼 순서 확정: 출판일, 제목, 저자, 저널, 인용수, DOI, 초록 (+ Paper ID, URL)
         column_order = ['Publication Date', 'Title', 'Authors', 'Journal',
-                       'Citation Count', 'DOI', 'Abstract']
+                       'Citation Count', 'DOI', 'Abstract', 'Paper ID', 'URL']
         df = df[column_order]
 
         return df
+
+    @staticmethod
+    def remove_duplicates(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+        """
+        DOI 또는 Paper ID 기준으로 중복 제거
+
+        Args:
+            df: 논문 DataFrame
+
+        Returns:
+            tuple: (중복 제거된 DataFrame, 제거된 중복 수)
+        """
+        original_count = len(df)
+
+        # DOI가 'N/A'가 아닌 경우 DOI로 중복 제거
+        # DOI가 'N/A'인 경우 Paper ID로 중복 제거
+        df['_dedup_key'] = df.apply(
+            lambda row: row['DOI'] if row['DOI'] != 'N/A' else f"PID_{row['Paper ID']}",
+            axis=1
+        )
+
+        # 중복 제거 (첫 번째 항목 유지)
+        df_unique = df.drop_duplicates(subset=['_dedup_key'], keep='first')
+
+        # 임시 컬럼 제거
+        df_unique = df_unique.drop(columns=['_dedup_key'])
+
+        removed_count = original_count - len(df_unique)
+
+        return df_unique, removed_count
 
 
 class PaperFilter:
@@ -537,20 +743,25 @@ class PaperSearchFilterGUI:
             # API 키 가져오기
             api_key = self.api_key_var.get().strip() if self.api_key_var.get().strip() else None
 
-            # API 키가 있으면 새로운 API 객체 생성
+            # log_callback 포함한 API 객체 생성
+            api = SemanticScholarAPI(api_key=api_key, log_callback=self.log_search_status)
+
             if api_key:
-                api = SemanticScholarAPI(api_key=api_key)
-                self.log_search_status("API 키를 사용하여 검색합니다.")
+                self.log_search_status("✅ API 키를 사용하여 검색합니다.")
             else:
-                api = self.api
-                self.log_search_status("API 키 없이 검색합니다 (기본 rate limit).")
+                self.log_search_status("⚠️ API 키 없이 검색합니다 (기본 rate limit).")
 
             limit = self.limit_var.get()
             year_from = int(self.year_from_var.get()) if self.year_from_var.get().strip() else None
             year_to = int(self.year_to_var.get()) if self.year_to_var.get().strip() else None
 
-            self.log_search_status(f"검색 시작: '{query}'")
-            self.log_search_status(f"최대 {limit}편의 논문을 검색합니다...")
+            self.log_search_status(f"\n{'='*60}")
+            self.log_search_status(f"검색 키워드: '{query}'")
+            self.log_search_status(f"최대 결과 수: {limit}편")
+            if year_from or year_to:
+                year_range = f"{year_from or '?'} ~ {year_to or '?'}"
+                self.log_search_status(f"연도 범위: {year_range}")
+            self.log_search_status(f"{'='*60}\n")
 
             # 검색 실행
             papers = api.search_papers(
@@ -562,23 +773,44 @@ class PaperSearchFilterGUI:
             )
 
             if not papers:
-                self.log_search_status("검색 결과가 없습니다.")
+                self.log_search_status("\n❌ 검색 결과가 없습니다.")
                 messagebox.showinfo("알림", "검색 결과가 없습니다.")
                 return
 
-            self.log_search_status(f"\n총 {len(papers)}편의 논문을 찾았습니다.")
-            self.log_search_status("엑셀 파일로 저장 중...")
+            self.log_search_status(f"\n{'='*60}")
+            self.log_search_status(f"📊 데이터 처리 중...")
+            self.log_search_status(f"{'='*60}")
 
-            # DataFrame 변환 (지정된 컬럼 순서: 출판일, 제목, 저자, 저널, 인용수, DOI, 초록)
+            # DataFrame 변환
             df = api.format_papers_for_export(papers)
+            self.log_search_status(f"✓ {len(papers)}편의 논문 데이터 변환 완료")
+
+            # 중복 제거
+            df_unique, removed_count = SemanticScholarAPI.remove_duplicates(df)
+            if removed_count > 0:
+                self.log_search_status(f"✓ {removed_count}개의 중복 논문 제거")
+                self.log_search_status(f"✓ 최종 논문 수: {len(df_unique)}편")
+            else:
+                self.log_search_status(f"✓ 중복 논문 없음")
 
             # 엑셀 저장
-            df.to_excel(save_path, index=False, engine='openpyxl')
+            self.log_search_status(f"\n💾 엑셀 파일 저장 중...")
+            df_unique.to_excel(save_path, index=False, engine='openpyxl')
 
-            self.log_search_status(f"✓ 저장 완료: {save_path}")
-            self.log_search_status(f"✓ 컬럼 순서: 출판일, 제목, 저자, 저널, 인용수, DOI, 초록")
+            self.log_search_status(f"\n{'='*60}")
+            self.log_search_status(f"✅ 저장 완료!")
+            self.log_search_status(f"{'='*60}")
+            self.log_search_status(f"📁 파일 경로: {save_path}")
+            self.log_search_status(f"📊 논문 수: {len(df_unique)}편")
+            self.log_search_status(f"📅 저장 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            self.log_search_status(f"{'='*60}")
 
-            messagebox.showinfo("완료", f"검색 완료!\n{len(papers)}편의 논문이 저장되었습니다.\n\n{save_path}")
+            messagebox.showinfo("완료",
+                f"검색 완료!\n\n"
+                f"검색된 논문: {len(papers)}편\n"
+                f"중복 제거: {removed_count}편\n"
+                f"최종 저장: {len(df_unique)}편\n\n"
+                f"{save_path}")
 
         except Exception as e:
             self.log_search_status(f"\n오류 발생: {str(e)}")
