@@ -20,11 +20,15 @@ import threading
 class SemanticScholarAPI:
     """Semantic Scholar API 검색 클래스"""
 
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.headers = {
             'User-Agent': 'Mozilla/5.0'
         }
+
+        # API 키가 있으면 헤더에 추가
+        if api_key:
+            self.headers['x-api-key'] = api_key
 
     def search_papers(
         self,
@@ -326,20 +330,27 @@ class PaperSearchFilterGUI:
         settings_frame = ttk.LabelFrame(self.search_tab, text="검색 설정", padding=10)
         settings_frame.pack(fill='x', padx=10, pady=10)
 
+        # API 키 입력
+        ttk.Label(settings_frame, text="API Key:").grid(row=0, column=0, sticky='w', pady=5)
+        self.api_key_var = tk.StringVar()
+        api_key_entry = ttk.Entry(settings_frame, textvariable=self.api_key_var, width=50, show='*')
+        api_key_entry.grid(row=0, column=1, columnspan=2, sticky='ew', pady=5, padx=5)
+        ttk.Label(settings_frame, text="(선택사항 - 더 높은 rate limit)", font=('', 8)).grid(row=0, column=3, sticky='w')
+
         # 키워드 입력
-        ttk.Label(settings_frame, text="검색 키워드:").grid(row=0, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="검색 키워드:").grid(row=1, column=0, sticky='w', pady=5)
         self.search_query_entry = ttk.Entry(settings_frame, width=50)
-        self.search_query_entry.grid(row=0, column=1, columnspan=2, sticky='ew', pady=5, padx=5)
+        self.search_query_entry.grid(row=1, column=1, columnspan=2, sticky='ew', pady=5, padx=5)
 
         # 결과 개수
-        ttk.Label(settings_frame, text="결과 개수:").grid(row=1, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="결과 개수:").grid(row=2, column=0, sticky='w', pady=5)
         self.limit_var = tk.IntVar(value=100)
-        ttk.Entry(settings_frame, textvariable=self.limit_var, width=15).grid(row=1, column=1, sticky='w', pady=5, padx=5)
+        ttk.Entry(settings_frame, textvariable=self.limit_var, width=15).grid(row=2, column=1, sticky='w', pady=5, padx=5)
 
         # 연도 범위
-        ttk.Label(settings_frame, text="연도 범위:").grid(row=2, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="연도 범위:").grid(row=3, column=0, sticky='w', pady=5)
         year_frame = ttk.Frame(settings_frame)
-        year_frame.grid(row=2, column=1, sticky='w', pady=5, padx=5)
+        year_frame.grid(row=3, column=1, sticky='w', pady=5, padx=5)
 
         self.year_from_var = tk.StringVar()
         self.year_to_var = tk.StringVar()
@@ -349,10 +360,10 @@ class PaperSearchFilterGUI:
         ttk.Label(year_frame, text=" (선택사항)").pack(side='left', padx=5)
 
         # 저장 경로
-        ttk.Label(settings_frame, text="저장 경로:").grid(row=3, column=0, sticky='w', pady=5)
+        ttk.Label(settings_frame, text="저장 경로:").grid(row=4, column=0, sticky='w', pady=5)
         self.save_path_var = tk.StringVar()
-        ttk.Entry(settings_frame, textvariable=self.save_path_var, width=40).grid(row=3, column=1, sticky='ew', pady=5, padx=5)
-        ttk.Button(settings_frame, text="찾아보기", command=self.browse_save_path).grid(row=3, column=2, pady=5, padx=5)
+        ttk.Entry(settings_frame, textvariable=self.save_path_var, width=40).grid(row=4, column=1, sticky='ew', pady=5, padx=5)
+        ttk.Button(settings_frame, text="찾아보기", command=self.browse_save_path).grid(row=4, column=2, pady=5, padx=5)
 
         settings_frame.columnconfigure(1, weight=1)
 
@@ -523,6 +534,17 @@ class PaperSearchFilterGUI:
             return
 
         try:
+            # API 키 가져오기
+            api_key = self.api_key_var.get().strip() if self.api_key_var.get().strip() else None
+
+            # API 키가 있으면 새로운 API 객체 생성
+            if api_key:
+                api = SemanticScholarAPI(api_key=api_key)
+                self.log_search_status("API 키를 사용하여 검색합니다.")
+            else:
+                api = self.api
+                self.log_search_status("API 키 없이 검색합니다 (기본 rate limit).")
+
             limit = self.limit_var.get()
             year_from = int(self.year_from_var.get()) if self.year_from_var.get().strip() else None
             year_to = int(self.year_to_var.get()) if self.year_to_var.get().strip() else None
@@ -531,7 +553,7 @@ class PaperSearchFilterGUI:
             self.log_search_status(f"최대 {limit}편의 논문을 검색합니다...")
 
             # 검색 실행
-            papers = self.api.search_papers(
+            papers = api.search_papers(
                 query=query,
                 limit=limit,
                 year_from=year_from,
@@ -548,7 +570,7 @@ class PaperSearchFilterGUI:
             self.log_search_status("엑셀 파일로 저장 중...")
 
             # DataFrame 변환 (지정된 컬럼 순서: 출판일, 제목, 저자, 저널, 인용수, DOI, 초록)
-            df = self.api.format_papers_for_export(papers)
+            df = api.format_papers_for_export(papers)
 
             # 엑셀 저장
             df.to_excel(save_path, index=False, engine='openpyxl')

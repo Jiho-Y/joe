@@ -39,12 +39,13 @@ python paper_search_filter.py
 ```
 
 ### 1. 논문 검색 탭
-1. 검색 키워드 입력 (예: "machine learning")
-2. 결과 개수 설정 (기본값: 100)
-3. (선택) 연도 범위 설정
-4. 저장 경로 선택 (찾아보기 버튼 클릭)
-5. "검색 시작" 버튼 클릭
-6. 진행 상황 확인 후 완료 대기
+1. (선택) API Key 입력 - 더 높은 rate limit을 위해 권장
+2. 검색 키워드 입력 (예: "machine learning")
+3. 결과 개수 설정 (기본값: 100)
+4. (선택) 연도 범위 설정
+5. 저장 경로 선택 (찾아보기 버튼 클릭)
+6. "검색 시작" 버튼 클릭
+7. 진행 상황 확인 후 완료 대기
 
 ### 2. 논문 필터링 탭
 1. "찾아보기" 버튼으로 Excel/CSV 파일 선택
@@ -55,6 +56,24 @@ python paper_search_filter.py
    - 연도 범위, 인용 수 범위 설정
 4. "필터링 실행" 버튼 클릭
 5. 결과 확인 후 "결과 저장" 버튼으로 저장
+
+## Semantic Scholar API Key 얻기 (선택사항)
+
+API 키를 사용하면 더 높은 rate limit을 받을 수 있어 대량 검색 시 유리합니다.
+
+### API Key 발급 방법
+1. [Semantic Scholar API](https://www.semanticscholar.org/product/api) 페이지 방문
+2. "Get API Key" 또는 "Sign Up" 클릭
+3. 계정 생성 또는 로그인
+4. API Key 발급 받기
+5. 프로그램의 "API Key" 필드에 입력
+
+### API Key 사용 시 장점
+- 더 높은 rate limit (분당 요청 수 증가)
+- 안정적인 대량 검색 가능
+- API 사용량 모니터링 가능
+
+**참고**: API Key 없이도 프로그램 사용은 가능하지만, 기본 rate limit이 적용됩니다.
 
 ## 필터링 예시
 
