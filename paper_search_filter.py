@@ -99,7 +99,8 @@ class SemanticScholarAPI:
         offset: int = 0,
         year_from: Optional[int] = None,
         year_to: Optional[int] = None,
-        max_retries: int = 10
+        max_retries: int = 5,
+        stop_flag: Optional[threading.Event] = None
     ) -> Optional[Dict]:
         """
         단일 배치 검색 (재시도 로직 포함)
@@ -111,10 +112,16 @@ class SemanticScholarAPI:
             year_from: 시작 연도
             year_to: 종료 연도
             max_retries: 재시도 최대 횟수
+            stop_flag: 중단 플래그
 
         Returns:
             dict: {'data': 논문 리스트, 'total': 전체 결과 수} 또는 None
         """
+        # 중단 확인
+        if stop_flag and stop_flag.is_set():
+            self.log("🛑 검색이 중단되었습니다.")
+            return None
+
         params = {
             'query': query,
             'limit': min(limit, 100),
@@ -130,16 +137,28 @@ class SemanticScholarAPI:
         elif year_to:
             params['year'] = f"-{year_to}"
 
+        url = f"{self.base_url}/paper/search"
+
         for attempt in range(max_retries):
+            # 중단 확인
+            if stop_flag and stop_flag.is_set():
+                self.log("🛑 검색이 중단되었습니다.")
+                return None
+
             try:
                 if attempt > 0:
                     self.log(f"📌 재시도 {attempt + 1}/{max_retries} (offset={offset})")
 
+                # 첫 시도에만 URL 로깅
+                if attempt == 0 and offset == 0:
+                    self.log(f"🔗 API URL: {url}")
+                    self.log(f"📦 Query: {query[:50]}{'...' if len(query) > 50 else ''}")
+
                 response = requests.get(
-                    f"{self.base_url}/paper/search",
+                    url,
                     params=params,
                     headers=self.headers,
-                    timeout=300  # 5분 타임아웃
+                    timeout=30  # 30초 타임아웃으로 변경
                 )
 
                 # Rate limit 처리 (429 에러)
@@ -210,13 +229,44 @@ class SemanticScholarAPI:
 
         return None
 
+    def test_connection(self) -> bool:
+        """
+        API 연결 테스트
+
+        Returns:
+            bool: 연결 성공 여부
+        """
+        try:
+            self.log("🔍 API 연결 테스트 중...")
+            response = requests.get(
+                f"{self.base_url}/paper/search",
+                params={'query': 'test', 'limit': 1, 'fields': 'paperId'},
+                headers=self.headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                self.log(f"✅ API 연결 성공! (응답 시간: {response.elapsed.total_seconds():.2f}초)")
+                return True
+            else:
+                self.log(f"⚠️ API 응답 코드: {response.status_code}")
+                return False
+
+        except requests.exceptions.Timeout:
+            self.log("❌ 연결 시간 초과 (10초)")
+            return False
+        except Exception as e:
+            self.log(f"❌ 연결 실패: {str(e)}")
+            return False
+
     def search_papers(
         self,
         query: str,
         limit: int = 100,
         year_from: Optional[int] = None,
         year_to: Optional[int] = None,
-        progress_callback=None
+        progress_callback=None,
+        stop_flag: Optional[threading.Event] = None
     ) -> List[Dict]:
         """
         논문 검색 (Pagination 지원)
@@ -227,6 +277,7 @@ class SemanticScholarAPI:
             year_from: 시작 연도
             year_to: 종료 연도
             progress_callback: 진행상황 콜백 함수
+            stop_flag: 중단 플래그
 
         Returns:
             논문 정보 리스트
@@ -234,6 +285,11 @@ class SemanticScholarAPI:
         all_papers = []
         offset = 0
         batch_size = 100
+
+        # 중단 확인
+        if stop_flag and stop_flag.is_set():
+            self.log("🛑 검색이 중단되었습니다.")
+            return []
 
         self.log(f"🔍 '{query}' 검색 시작...")
 
@@ -243,11 +299,15 @@ class SemanticScholarAPI:
             limit=batch_size,
             offset=0,
             year_from=year_from,
-            year_to=year_to
+            year_to=year_to,
+            stop_flag=stop_flag
         )
 
         if first_result is None:
-            self.log(f"❌ '{query}' 검색 실패")
+            if stop_flag and stop_flag.is_set():
+                self.log(f"🛑 '{query}' 검색이 중단되었습니다.")
+            else:
+                self.log(f"❌ '{query}' 검색 실패")
             return []
 
         total_available = first_result.get('total', 0)
@@ -273,6 +333,11 @@ class SemanticScholarAPI:
         batch_num = 2
 
         while len(all_papers) < target:
+            # 중단 확인
+            if stop_flag and stop_flag.is_set():
+                self.log("🛑 검색이 중단되었습니다.")
+                break
+
             offset += batch_size
             remaining = target - len(all_papers)
             current_limit = min(batch_size, remaining)
@@ -289,11 +354,15 @@ class SemanticScholarAPI:
                 limit=current_limit,
                 offset=offset,
                 year_from=year_from,
-                year_to=year_to
+                year_to=year_to,
+                stop_flag=stop_flag
             )
 
             if result is None:
-                self.log(f"⚠️ 배치 {batch_num} 검색 실패 (계속 진행)")
+                if stop_flag and stop_flag.is_set():
+                    self.log(f"🛑 배치 {batch_num} 검색 중단")
+                else:
+                    self.log(f"⚠️ 배치 {batch_num} 검색 실패 (계속 진행)")
                 break
 
             papers = result.get('data', [])
@@ -562,6 +631,10 @@ class PaperSearchFilterGUI:
         self.current_df = None
         self.current_excel_path = None
 
+        # 검색 중단 플래그
+        self.stop_search_flag = None
+        self.search_thread_running = False
+
         # 탭 생성
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
@@ -636,7 +709,12 @@ class PaperSearchFilterGUI:
         # 검색 버튼
         btn_frame = ttk.Frame(self.search_tab)
         btn_frame.pack(fill='x', padx=10, pady=5)
-        ttk.Button(btn_frame, text="검색 시작", command=self.start_search, width=20).pack()
+
+        ttk.Button(btn_frame, text="🔗 연결 테스트", command=self.test_api_connection, width=15).pack(side='left', padx=5)
+        self.start_search_btn = ttk.Button(btn_frame, text="🔍 검색 시작", command=self.start_search, width=15)
+        self.start_search_btn.pack(side='left', padx=5)
+        self.stop_search_btn = ttk.Button(btn_frame, text="🛑 검색 중단", command=self.stop_search, width=15, state='disabled')
+        self.stop_search_btn.pack(side='left', padx=5)
 
         # 진행 상황
         progress_frame = ttk.LabelFrame(self.search_tab, text="진행 상황", padding=10)
@@ -829,8 +907,15 @@ class PaperSearchFilterGUI:
                 limit=limit,
                 year_from=year_from,
                 year_to=year_to,
-                progress_callback=self.update_progress
+                progress_callback=self.update_progress,
+                stop_flag=self.stop_search_flag
             )
+
+            # 중단 확인
+            if self.stop_search_flag and self.stop_search_flag.is_set():
+                self.log_search_status("\n🛑 검색이 중단되었습니다.")
+                messagebox.showinfo("중단", "검색이 중단되었습니다.")
+                return
 
             if not papers:
                 self.log_search_status("\n❌ 검색 결과가 없습니다.")
@@ -876,13 +961,56 @@ class PaperSearchFilterGUI:
             self.log_search_status(f"\n오류 발생: {str(e)}")
             messagebox.showerror("오류", f"검색 중 오류가 발생했습니다:\n{str(e)}")
 
+        finally:
+            # 버튼 상태 복원
+            self.search_thread_running = False
+            self.start_search_btn.config(state='normal')
+            self.stop_search_btn.config(state='disabled')
+
     def start_search(self):
         """검색 시작 (별도 스레드)"""
+        if self.search_thread_running:
+            messagebox.showwarning("경고", "이미 검색이 진행 중입니다.")
+            return
+
         self.search_status_text.delete(1.0, tk.END)
         self.search_progress['value'] = 0
 
+        # 중단 플래그 초기화
+        self.stop_search_flag = threading.Event()
+        self.search_thread_running = True
+
+        # 버튼 상태 변경
+        self.start_search_btn.config(state='disabled')
+        self.stop_search_btn.config(state='normal')
+
         # 백그라운드 스레드로 실행
         thread = threading.Thread(target=self.search_thread, daemon=True)
+        thread.start()
+
+    def stop_search(self):
+        """검색 중단"""
+        if self.stop_search_flag:
+            self.stop_search_flag.set()
+            self.log_search_status("\n🛑 검색 중단 요청...")
+            self.stop_search_btn.config(state='disabled')
+
+    def test_api_connection(self):
+        """API 연결 테스트"""
+        self.search_status_text.delete(1.0, tk.END)
+
+        api_key = self.api_key_var.get().strip() if self.api_key_var.get().strip() else None
+        api = SemanticScholarAPI(api_key=api_key, log_callback=self.log_search_status)
+
+        # 백그라운드에서 테스트 실행
+        def test_thread():
+            result = api.test_connection()
+            if result:
+                messagebox.showinfo("성공", "API 연결에 성공했습니다!")
+            else:
+                messagebox.showerror("실패", "API 연결에 실패했습니다.\n로그를 확인하세요.")
+
+        thread = threading.Thread(target=test_thread, daemon=True)
         thread.start()
 
     def apply_filter(self):
