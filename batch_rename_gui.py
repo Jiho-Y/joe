@@ -27,61 +27,33 @@ class BatchRenameGUI:
         self.config_file = os.path.expanduser("~/.batch_rename_config.json")
         self.manual_renames = {}  # 수동으로 변경된 파일 이름 저장
 
-        # 다크모드 설정
-        self.dark_mode = tk.BooleanVar(value=False)
-
         # 설정 로드
         self.load_config()
-
-        # 테마 초기화
-        self.setup_themes()
 
         # 위젯 생성
         self.create_widgets()
 
-        # 초기 테마 적용
-        self.apply_theme()
+        # 스타일 적용
+        self.apply_styles()
 
         # 실시간 미리보기 설정
         self.setup_realtime_preview()
 
-    def setup_themes(self):
-        """다크/라이트 모드 테마 설정"""
-        self.themes = {
-            'light': {
-                'bg': '#f0f0f0',
-                'fg': '#000000',
-                'select_bg': '#0078d7',
-                'select_fg': '#ffffff',
-                'tree_bg': '#ffffff',
-                'tree_fg': '#000000',
-                'highlight': '#ffffcc',
-                'button_bg': '#e1e1e1',
-                'entry_bg': '#ffffff',
-                'entry_fg': '#000000',
-                'frame_bg': '#f0f0f0',
-                'insert_bg': '#000000',
-            },
-            'dark': {
-                'bg': '#2b2b2b',
-                'fg': '#e0e0e0',
-                'select_bg': '#0078d7',
-                'select_fg': '#ffffff',
-                'tree_bg': '#1e1e1e',
-                'tree_fg': '#e0e0e0',
-                'highlight': '#4a4a2a',
-                'button_bg': '#3c3c3c',
-                'entry_bg': '#2d2d2d',
-                'entry_fg': '#e0e0e0',
-                'frame_bg': '#2b2b2b',
-                'insert_bg': '#ffffff',
-            }
+    def apply_styles(self):
+        """라이트 모드 스타일 적용"""
+        colors = {
+            'bg': '#f0f0f0',
+            'fg': '#000000',
+            'select_bg': '#0078d7',
+            'select_fg': '#ffffff',
+            'tree_bg': '#ffffff',
+            'tree_fg': '#000000',
+            'highlight': '#ffffcc',
+            'button_bg': '#e1e1e1',
+            'entry_bg': '#ffffff',
+            'entry_fg': '#000000',
+            'insert_bg': '#000000',
         }
-
-    def apply_theme(self):
-        """현재 테마 적용"""
-        theme = 'dark' if self.dark_mode.get() else 'light'
-        colors = self.themes[theme]
 
         # 루트 윈도우 배경색
         self.root.configure(bg=colors['bg'])
@@ -101,7 +73,7 @@ class BatchRenameGUI:
         style.configure('TButton', background=colors['button_bg'], foreground=colors['fg'])
         style.map('TButton', background=[('active', colors['select_bg'])])
 
-        # Combobox 스타일 (ttk는 유지하되 색상 수정)
+        # Combobox 스타일
         style.configure('TCombobox',
                        fieldbackground=colors['entry_bg'],
                        background=colors['entry_bg'],
@@ -177,11 +149,6 @@ class BatchRenameGUI:
                          activebackground=colors['bg'],
                          activeforeground=colors['fg'])
 
-    def toggle_theme(self):
-        """테마 토글"""
-        self.apply_theme()
-        self.save_config()
-
     def load_config(self):
         """설정 파일 로드"""
         try:
@@ -189,7 +156,6 @@ class BatchRenameGUI:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     self.recent_folders = config.get('recent_folders', [])
-                    self.dark_mode.set(config.get('dark_mode', False))
         except Exception as e:
             print(f"설정 로드 오류: {e}")
 
@@ -198,7 +164,6 @@ class BatchRenameGUI:
         try:
             config = {
                 'recent_folders': self.recent_folders[:10],  # 최근 10개만 저장
-                'dark_mode': self.dark_mode.get()
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
@@ -262,11 +227,6 @@ class BatchRenameGUI:
         edit_menu.add_command(label="실행 취소 (Undo)", command=self.undo_rename, accelerator="Cmd+Z")
         edit_menu.add_separator()
         edit_menu.add_command(label="모든 수동 변경 취소", command=self.clear_manual_renames)
-
-        # 보기 메뉴
-        view_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="보기", menu=view_menu)
-        view_menu.add_checkbutton(label="다크 모드", variable=self.dark_mode, command=self.toggle_theme)
 
         # 키보드 단축키 (Mac)
         self.root.bind('<Command-z>', lambda e: self.undo_rename())
@@ -633,8 +593,8 @@ class BatchRenameGUI:
                 tag = ''
             self.tree.insert("", tk.END, values=(original, new_name), tags=(tag,))
 
-        # 변경된 항목 하이라이트 (테마에 맞게)
-        self.apply_theme()
+        # 스타일 다시 적용
+        self.apply_styles()
 
     def generate_new_name(self, original_name, index):
         """새 파일 이름 생성"""
