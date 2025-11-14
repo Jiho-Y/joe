@@ -92,16 +92,14 @@ class Database:
             )
         """)
 
-        # Full-text search index (FTS5)
+        # Full-text search index (FTS5) - standalone table
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS FullTextIndex USING fts5(
                 paper_id UNINDEXED,
                 title,
                 authors,
                 abstract,
-                full_text,
-                content=Papers,
-                content_rowid=id
+                full_text
             )
         """)
 
@@ -204,67 +202,49 @@ class Database:
 
         return papers
 
-    def search_papers(self, query: str, limit: int = 50) -> List[Dict]:
+    def search_papers(self, query: str, limit: int = 100) -> List[Dict]:
         """
-        Full-text search across papers with improved ranking.
+        Full-text search across papers - completely rewritten for accuracy.
 
         Args:
-            query: Search query
+            query: Search query (e.g., "heat treatment", "fatigue crack")
             limit: Maximum results
 
         Returns:
             List of matching papers with relevance rank
         """
+        if not query or not query.strip():
+            # Empty query - return all papers
+            return self.get_all_papers(limit)
+
         cursor = self.conn.cursor()
 
-        # Prepare query for FTS5
-        # Split query into terms and apply OR logic for better recall
-        terms = query.strip().split()
+        # Clean query
+        query = query.strip()
 
-        # Build FTS5 query with field weighting
-        # Title gets 3x weight, abstract 2x weight
-        if len(terms) == 1:
-            # Single term - exact match
-            fts_query = terms[0]
-        else:
-            # Multiple terms - phrase match + individual terms
-            # This finds exact phrase matches first, then individual word matches
-            phrase_query = ' '.join(terms)
-            term_queries = ' OR '.join(terms)
-            fts_query = f'"{phrase_query}" OR ({term_queries})'
-
+        # Strategy: Use simple MATCH with proper escaping
+        # FTS5 will handle relevance ranking automatically
         try:
-            # FTS5 search with BM25 ranking
-            # BM25 ranks by:
-            # 1. Term frequency (how often term appears)
-            # 2. Inverse document frequency (rarity of term)
-            # 3. Document length normalization
+            # Simple FTS5 match - let SQLite handle the ranking
             cursor.execute("""
-                SELECT Papers.*,
-                       bm25(FullTextIndex, 3.0, 2.0, 1.0, 1.0) as rank
-                FROM Papers
-                JOIN FullTextIndex ON Papers.id = FullTextIndex.paper_id
-                WHERE FullTextIndex MATCH ?
-                ORDER BY rank
-                LIMIT ?
-            """, (fts_query, limit))
-
-            papers = []
-            for row in cursor.fetchall():
-                paper = dict(row)
-                if paper['authors']:
-                    paper['authors'] = json.loads(paper['authors'])
-                papers.append(paper)
-
-            return papers
-
-        except Exception as e:
-            # Fallback to simple query if complex query fails
-            print(f"FTS5 query error: {e}, falling back to simple search")
-            cursor.execute("""
-                SELECT Papers.*, rank
-                FROM Papers
-                JOIN FullTextIndex ON Papers.id = FullTextIndex.paper_id
+                SELECT DISTINCT
+                    Papers.id,
+                    Papers.title,
+                    Papers.authors,
+                    Papers.year,
+                    Papers.journal,
+                    Papers.doi,
+                    Papers.arxiv_id,
+                    Papers.abstract,
+                    Papers.pdf_path,
+                    Papers.num_pages,
+                    Papers.file_size,
+                    Papers.added_date,
+                    Papers.modified_date,
+                    Papers.notes,
+                    bm25(FullTextIndex) as rank
+                FROM FullTextIndex
+                JOIN Papers ON FullTextIndex.paper_id = Papers.id
                 WHERE FullTextIndex MATCH ?
                 ORDER BY rank
                 LIMIT ?
@@ -274,10 +254,50 @@ class Database:
             for row in cursor.fetchall():
                 paper = dict(row)
                 if paper['authors']:
-                    paper['authors'] = json.loads(paper['authors'])
+                    try:
+                        paper['authors'] = json.loads(paper['authors'])
+                    except:
+                        paper['authors'] = []
+                papers.append(paper)
+
+            if papers:
+                print(f"✓ Found {len(papers)} results for: {query}")
+                return papers
+
+        except Exception as e:
+            print(f"FTS5 search error: {e}")
+
+        # Fallback: Simple LIKE search if FTS5 fails
+        print(f"⚠ Using fallback LIKE search for: {query}")
+        try:
+            search_pattern = f"%{query}%"
+            cursor.execute("""
+                SELECT * FROM Papers
+                WHERE title LIKE ? OR abstract LIKE ?
+                ORDER BY
+                    CASE
+                        WHEN title LIKE ? THEN 1
+                        WHEN abstract LIKE ? THEN 2
+                        ELSE 3
+                    END
+                LIMIT ?
+            """, (search_pattern, search_pattern, search_pattern, search_pattern, limit))
+
+            papers = []
+            for row in cursor.fetchall():
+                paper = dict(row)
+                if paper['authors']:
+                    try:
+                        paper['authors'] = json.loads(paper['authors'])
+                    except:
+                        paper['authors'] = []
                 papers.append(paper)
 
             return papers
+
+        except Exception as e:
+            print(f"Fallback search error: {e}")
+            return []
 
     def add_keywords(
         self,
@@ -406,20 +426,29 @@ class Database:
         """
         cursor = self.conn.cursor()
 
+        # Delete existing entry if any
+        cursor.execute("DELETE FROM FullTextIndex WHERE paper_id = ?", (paper_id,))
+
         # Get paper metadata
         paper = self.get_paper(paper_id)
         if not paper:
             return
 
+        # Prepare text for indexing
+        title = paper['title'] or ''
+        authors = ' '.join(paper['authors']) if paper['authors'] else ''
+        abstract = paper['abstract'] or ''
+
+        # Insert into FTS5
         cursor.execute("""
             INSERT INTO FullTextIndex (paper_id, title, authors, abstract, full_text)
             VALUES (?, ?, ?, ?, ?)
         """, (
             paper_id,
-            paper['title'],
-            json.dumps(paper['authors']) if paper['authors'] else '',
-            paper['abstract'] or '',
-            full_text
+            title,
+            authors,
+            abstract,
+            full_text[:50000]  # Limit full text to 50K chars
         ))
 
         self.conn.commit()
