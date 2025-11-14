@@ -3,10 +3,12 @@
 Research Paper Manager - Main Entry Point
 A desktop application for managing academic papers with PDF processing,
 keyword extraction, and citation network visualization.
+
+Uses PySide6 (Qt6) for cross-platform GUI.
 """
 
 import sys
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 from src.ui.main_window import MainWindow
 
 

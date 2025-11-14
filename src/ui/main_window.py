@@ -1,15 +1,16 @@
 """
-Main application window using PyQt6.
+Main application window using PySide6 (Qt6).
+Compatible with both PyQt6 and PySide6.
 """
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QFileDialog, QMessageBox, QLineEdit, QLabel,
     QSplitter, QTextEdit, QListWidget, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QAction
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QAction
 from pathlib import Path
 from typing import List, Optional
 import sys
@@ -27,9 +28,9 @@ from src.models.paper import Paper
 class PDFImportThread(QThread):
     """Background thread for importing PDFs."""
 
-    progress = pyqtSignal(int, str)  # (percentage, status_message)
-    finished = pyqtSignal(list)  # List of imported paper IDs
-    error = pyqtSignal(str)
+    progress = Signal(int, str)  # (percentage, status_message)
+    finished = Signal(list)  # List of imported paper IDs
+    error = Signal(str)
 
     def __init__(self, pdf_paths: List[str], db: Database):
         super().__init__()
