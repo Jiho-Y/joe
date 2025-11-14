@@ -140,8 +140,7 @@ class PDFProcessor:
 
     def _infer_authors_from_text(self, text: str) -> List[str]:
         """
-        Infer author names from first page text.
-        This is heuristic-based and may not be 100% accurate.
+        Infer author names from first page text with improved patterns.
 
         Args:
             text: First page text
@@ -149,24 +148,112 @@ class PDFProcessor:
         Returns:
             List of inferred author names
         """
-        # Look for common patterns like "FirstName LastName"
-        # This is a simplified approach; GROBID will do better
         authors = []
 
-        # Pattern: capitalized words followed by capitalized words (name pattern)
-        name_pattern = r'\b[A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
-        matches = re.findall(name_pattern, text[:1000])  # First 1000 chars
+        # Look for explicit author section first
+        author_section_patterns = [
+            r'(?:Authors?|By)\s*[:\-]?\s*\n\s*(.+?)(?:\n\n|Abstract|ABSTRACT)',
+            r'(?:Authors?|By)\s*[:\-]\s*(.+?)(?:\n\n|$)',
+        ]
 
-        # Filter out common false positives
-        stopwords = {'The', 'This', 'That', 'These', 'Those', 'University', 'Institute'}
-        authors = [m for m in matches if m.split()[0] not in stopwords]
+        for pattern in author_section_patterns:
+            match = re.search(pattern, text[:2000], re.DOTALL | re.IGNORECASE)
+            if match:
+                author_text = match.group(1)
+                # Extract names from this section
+                names = self._extract_names_from_text(author_text)
+                if names:
+                    return names[:15]  # Max 15 authors
 
-        # Return unique authors (max 10)
-        return list(dict.fromkeys(authors))[:10]
+        # Fallback: look for names after title (usually 2nd-5th line)
+        lines = text.split('\n')
+        for i, line in enumerate(lines[1:10]):  # Skip first line (usually title)
+            line = line.strip()
+
+            # Skip short lines, URLs, dates, etc.
+            if len(line) < 5 or '@' in line or 'http' in line:
+                continue
+
+            # Look for name patterns in this line
+            names = self._extract_names_from_text(line)
+            if names:
+                authors.extend(names)
+
+        # Deduplicate and return
+        unique_authors = []
+        seen = set()
+        for author in authors:
+            if author.lower() not in seen:
+                seen.add(author.lower())
+                unique_authors.append(author)
+
+        return unique_authors[:15]  # Max 15 authors
+
+    def _extract_names_from_text(self, text: str) -> List[str]:
+        """
+        Extract person names from text using multiple patterns.
+
+        Args:
+            text: Text containing potential names
+
+        Returns:
+            List of extracted names
+        """
+        names = []
+
+        # Pattern 1: First Middle Last (e.g., John A. Smith)
+        pattern1 = r'\b[A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+\b'
+
+        # Pattern 2: First Last (e.g., John Smith)
+        pattern2 = r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b'
+
+        # Pattern 3: Last, First (e.g., Smith, John)
+        pattern3 = r'\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b'
+
+        # Pattern 4: Initials + Last (e.g., J.A. Smith)
+        pattern4 = r'\b[A-Z]\.[A-Z]\.\s+[A-Z][a-z]+\b'
+
+        all_patterns = [pattern1, pattern2, pattern3, pattern4]
+
+        for pattern in all_patterns:
+            matches = re.findall(pattern, text)
+            names.extend(matches)
+
+        # Filter out false positives
+        stopwords = {
+            'The', 'This', 'That', 'These', 'Those', 'They', 'There',
+            'University', 'Institute', 'Department', 'College', 'School',
+            'Science', 'Engineering', 'Technology', 'Research', 'Center',
+            'Journal', 'Conference', 'Proceedings', 'International', 'National',
+            'American', 'European', 'Asian', 'Society', 'Association',
+            'All Rights', 'Copyright', 'Permission', 'Published'
+        }
+
+        filtered_names = []
+        for name in names:
+            # Clean up
+            name = name.strip(',. ')
+
+            # Skip if first word is a stopword
+            first_word = name.split()[0]
+            if first_word in stopwords:
+                continue
+
+            # Skip if contains numbers
+            if any(char.isdigit() for char in name):
+                continue
+
+            # Skip if too short
+            if len(name) < 5:
+                continue
+
+            filtered_names.append(name)
+
+        return filtered_names
 
     def _extract_abstract(self, text: str) -> Optional[str]:
         """
-        Extract abstract from paper text.
+        Extract abstract from paper text with improved pattern matching.
 
         Args:
             text: First few pages of text
@@ -174,21 +261,43 @@ class PDFProcessor:
         Returns:
             Abstract text or None
         """
-        # Look for "Abstract" section
-        abstract_pattern = r'(?:abstract|ABSTRACT)\s*[:\-]?\s*\n(.+?)(?:\n\n|\n[A-Z]|\d+\s+Introduction)'
-        match = re.search(abstract_pattern, text, re.DOTALL | re.IGNORECASE)
+        # Multiple patterns to catch different abstract formats
+        patterns = [
+            # Pattern 1: Abstract followed by content until double newline or section
+            r'(?:abstract|ABSTRACT|Abstract)\s*[:\-—]?\s*\n\s*(.+?)(?:\n\n\s*(?:[A-Z]|Keywords|Introduction|1\.|I\.))',
 
-        if match:
-            abstract = match.group(1).strip()
-            # Clean up extra whitespace
-            abstract = re.sub(r'\s+', ' ', abstract)
-            return abstract[:1000]  # Limit length
+            # Pattern 2: Abstract in same line
+            r'(?:abstract|ABSTRACT|Abstract)\s*[:\-—]\s*(.+?)(?:\n\n|Keywords|Introduction)',
+
+            # Pattern 3: Abstract with Keywords marker
+            r'(?:abstract|ABSTRACT|Abstract)\s*[:\-—]?\s*\n\s*(.+?)(?:Keywords|KEYWORDS|Key words)',
+
+            # Pattern 4: Very flexible - abstract until Introduction or section 1
+            r'(?:abstract|ABSTRACT|Abstract)[\s\S]{0,50}?(.+?)(?:Introduction|INTRODUCTION|1\s+Introduction|I\s+INTRODUCTION|\n1\.)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                abstract = match.group(1).strip()
+
+                # Clean up
+                abstract = re.sub(r'\s+', ' ', abstract)  # Multiple spaces to single
+                abstract = re.sub(r'\n', ' ', abstract)   # Newlines to spaces
+
+                # Remove common artifacts
+                abstract = re.sub(r'^\d+\s*', '', abstract)  # Leading numbers
+                abstract = abstract.strip('.,;:')
+
+                # Validate: should be at least 50 chars and not too long
+                if 50 <= len(abstract) <= 3000:
+                    return abstract[:2000]  # Limit but allow longer abstracts
 
         return None
 
     def _infer_year_from_text(self, text: str) -> Optional[int]:
         """
-        Infer publication year from text.
+        Infer publication year from text with improved pattern matching.
 
         Args:
             text: First page text
@@ -196,14 +305,43 @@ class PDFProcessor:
         Returns:
             Year as integer or None
         """
-        # Look for 4-digit years in reasonable range
+        # Priority 1: Look for copyright/published year
+        copyright_patterns = [
+            r'[©Cc]opyright\s+(?:©\s*)?(\d{4})',
+            r'[Pp]ublished\s+(?:in\s+)?(\d{4})',
+            r'[Pp]ublication\s+[Yy]ear[:\s]+(\d{4})',
+            r'[Pp]ublished:\s+\w+\s+\d+,?\s+(\d{4})',
+        ]
+
+        for pattern in copyright_patterns:
+            match = re.search(pattern, text[:3000])
+            if match:
+                year = int(match.group(1))
+                if 1950 <= year <= 2030:  # Reasonable range
+                    return year
+
+        # Priority 2: Look for date patterns (Month Day, Year or Day Month Year)
+        date_patterns = [
+            r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(\d{4})\b',
+            r'\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b',
+        ]
+
+        for pattern in date_patterns:
+            match = re.search(pattern, text[:3000], re.IGNORECASE)
+            if match:
+                year = int(match.group(1))
+                if 1950 <= year <= 2030:
+                    return year
+
+        # Priority 3: Look for any 4-digit year in reasonable range
         year_pattern = r'\b(19\d{2}|20[0-2]\d)\b'
         matches = re.findall(year_pattern, text[:2000])
 
         if matches:
-            # Return the most recent year found
-            years = [int(y) for y in matches]
-            return max(years)
+            # Filter to reasonable range and return most recent
+            years = [int(y) for y in matches if 1950 <= int(y) <= 2030]
+            if years:
+                return max(years)
 
         return None
 

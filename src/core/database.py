@@ -206,7 +206,7 @@ class Database:
 
     def search_papers(self, query: str, limit: int = 50) -> List[Dict]:
         """
-        Full-text search across papers.
+        Full-text search across papers with improved ranking.
 
         Args:
             query: Search query
@@ -217,24 +217,67 @@ class Database:
         """
         cursor = self.conn.cursor()
 
-        # FTS5 search
-        cursor.execute("""
-            SELECT Papers.*, rank
-            FROM Papers
-            JOIN FullTextIndex ON Papers.id = FullTextIndex.paper_id
-            WHERE FullTextIndex MATCH ?
-            ORDER BY rank
-            LIMIT ?
-        """, (query, limit))
+        # Prepare query for FTS5
+        # Split query into terms and apply OR logic for better recall
+        terms = query.strip().split()
 
-        papers = []
-        for row in cursor.fetchall():
-            paper = dict(row)
-            if paper['authors']:
-                paper['authors'] = json.loads(paper['authors'])
-            papers.append(paper)
+        # Build FTS5 query with field weighting
+        # Title gets 3x weight, abstract 2x weight
+        if len(terms) == 1:
+            # Single term - exact match
+            fts_query = terms[0]
+        else:
+            # Multiple terms - phrase match + individual terms
+            # This finds exact phrase matches first, then individual word matches
+            phrase_query = ' '.join(terms)
+            term_queries = ' OR '.join(terms)
+            fts_query = f'"{phrase_query}" OR ({term_queries})'
 
-        return papers
+        try:
+            # FTS5 search with BM25 ranking
+            # BM25 ranks by:
+            # 1. Term frequency (how often term appears)
+            # 2. Inverse document frequency (rarity of term)
+            # 3. Document length normalization
+            cursor.execute("""
+                SELECT Papers.*,
+                       bm25(FullTextIndex, 3.0, 2.0, 1.0, 1.0) as rank
+                FROM Papers
+                JOIN FullTextIndex ON Papers.id = FullTextIndex.paper_id
+                WHERE FullTextIndex MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_query, limit))
+
+            papers = []
+            for row in cursor.fetchall():
+                paper = dict(row)
+                if paper['authors']:
+                    paper['authors'] = json.loads(paper['authors'])
+                papers.append(paper)
+
+            return papers
+
+        except Exception as e:
+            # Fallback to simple query if complex query fails
+            print(f"FTS5 query error: {e}, falling back to simple search")
+            cursor.execute("""
+                SELECT Papers.*, rank
+                FROM Papers
+                JOIN FullTextIndex ON Papers.id = FullTextIndex.paper_id
+                WHERE FullTextIndex MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (query, limit))
+
+            papers = []
+            for row in cursor.fetchall():
+                paper = dict(row)
+                if paper['authors']:
+                    paper['authors'] = json.loads(paper['authors'])
+                papers.append(paper)
+
+            return papers
 
     def add_keywords(
         self,
