@@ -325,18 +325,38 @@ class MainWindow(QMainWindow):
 
         self.current_paper = Paper.from_dict(paper_dict)
 
-        # Display details
+        # Display details with proper abstract formatting
+        abstract_text = self.current_paper.abstract or 'No abstract available.'
+
+        # Show abstract length if available
+        abstract_info = ""
+        if self.current_paper.abstract:
+            abstract_info = f" ({len(self.current_paper.abstract)} characters)"
+
         details_html = f"""
+        <style>
+            body {{ font-family: Arial, sans-serif; }}
+            h2 {{ color: #2c3e50; margin-bottom: 10px; }}
+            h3 {{ color: #34495e; margin-top: 15px; margin-bottom: 8px; }}
+            .metadata {{ margin: 5px 0; }}
+            .abstract {{
+                text-align: justify;
+                line-height: 1.6;
+                padding: 10px;
+                background-color: #f9f9f9;
+                border-left: 3px solid #3498db;
+            }}
+        </style>
         <h2>{self.current_paper.title}</h2>
-        <p><b>Authors:</b> {', '.join(self.current_paper.authors) if self.current_paper.authors else 'Unknown'}</p>
-        <p><b>Year:</b> {self.current_paper.year or 'Unknown'}</p>
-        <p><b>Journal:</b> {self.current_paper.journal or 'N/A'}</p>
-        <p><b>DOI:</b> {self.current_paper.doi or 'N/A'}</p>
-        <p><b>Pages:</b> {self.current_paper.num_pages or 'N/A'}</p>
-        <p><b>File:</b> {self.current_paper.pdf_path}</p>
+        <div class="metadata"><b>Authors:</b> {', '.join(self.current_paper.authors) if self.current_paper.authors else 'Unknown'}</div>
+        <div class="metadata"><b>Year:</b> {self.current_paper.year or 'Unknown'}</div>
+        <div class="metadata"><b>Journal:</b> {self.current_paper.journal or 'N/A'}</div>
+        <div class="metadata"><b>DOI:</b> {self.current_paper.doi or 'N/A'}</div>
+        <div class="metadata"><b>Pages:</b> {self.current_paper.num_pages or 'N/A'}</div>
+        <div class="metadata"><b>File:</b> <small>{self.current_paper.pdf_path}</small></div>
         <hr>
-        <h3>Abstract</h3>
-        <p>{self.current_paper.abstract or 'No abstract available.'}</p>
+        <h3>Abstract{abstract_info}</h3>
+        <div class="abstract">{abstract_text}</div>
         """
 
         self.details_text.setHtml(details_html)
