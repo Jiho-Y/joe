@@ -55,9 +55,18 @@ class PDFProcessor:
         """
         return [page.get_text("text") for page in self.doc]
 
-    def extract_metadata(self) -> Dict[str, any]:
+    def extract_metadata(self, use_semantic_scholar: bool = True) -> Dict[str, any]:
         """
-        Extract PDF metadata and infer additional information.
+        Extract PDF metadata with Semantic Scholar API (if available).
+
+        Strategy:
+        1. Extract DOI from PDF
+        2. If DOI found → fetch from Semantic Scholar (95% accuracy)
+        3. If no DOI → try title search on Semantic Scholar
+        4. Fallback → heuristic extraction from PDF
+
+        Args:
+            use_semantic_scholar: Use Semantic Scholar API (default True)
 
         Returns:
             Dictionary with metadata fields
@@ -67,6 +76,7 @@ class PDFProcessor:
 
         # Extract first page text for title/author inference
         first_page_text = self.doc[0].get_text("text") if self.num_pages > 0 else ""
+        first_two_pages = self.extract_text(max_pages=2)
 
         # Get file information
         file_size = self.pdf_path.stat().st_size
@@ -82,7 +92,63 @@ class PDFProcessor:
             'modification_date': pdf_metadata.get('modDate', ''),
         }
 
-        # Try to infer title from first page (often in large font)
+        # STEP 1: Try to extract DOI
+        doi = self._extract_doi(first_two_pages)
+        metadata['doi'] = doi
+
+        # STEP 2: If DOI found and Semantic Scholar enabled, fetch metadata
+        if doi and use_semantic_scholar:
+            try:
+                from src.utils.semantic_scholar import get_metadata_by_doi
+                ss_metadata = get_metadata_by_doi(doi)
+
+                if ss_metadata:
+                    print(f"✓ Semantic Scholar: Found metadata for DOI {doi}")
+                    # Merge Semantic Scholar data (prioritize over heuristics)
+                    metadata.update({
+                        'title': ss_metadata.get('title') or metadata.get('title'),
+                        'authors': ss_metadata.get('authors') or [],
+                        'year': ss_metadata.get('year'),
+                        'abstract': ss_metadata.get('abstract'),
+                        'journal': ss_metadata.get('journal'),
+                        'arxiv_id': ss_metadata.get('arxiv_id'),
+                        'source': 'semantic_scholar',
+                    })
+                    return metadata
+
+            except Exception as e:
+                print(f"Semantic Scholar API error: {e}")
+
+        # STEP 3: No DOI or API failed, try title-based search
+        if use_semantic_scholar:
+            # Infer title first
+            inferred_title = self._infer_title_from_text(first_page_text)
+            if inferred_title and len(inferred_title) > 15:
+                try:
+                    from src.utils.semantic_scholar import get_metadata_by_title
+                    ss_metadata = get_metadata_by_title(inferred_title)
+
+                    if ss_metadata:
+                        print(f"✓ Semantic Scholar: Found via title search")
+                        metadata.update({
+                            'title': ss_metadata.get('title') or inferred_title,
+                            'authors': ss_metadata.get('authors') or [],
+                            'year': ss_metadata.get('year'),
+                            'abstract': ss_metadata.get('abstract'),
+                            'journal': ss_metadata.get('journal'),
+                            'doi': ss_metadata.get('doi') or doi,
+                            'arxiv_id': ss_metadata.get('arxiv_id'),
+                            'source': 'semantic_scholar',
+                        })
+                        return metadata
+
+                except Exception as e:
+                    print(f"Semantic Scholar title search error: {e}")
+
+        # STEP 4: Fallback to heuristic extraction
+        print("⚠ Using heuristic extraction (Semantic Scholar unavailable)")
+
+        # Try to infer title from first page
         inferred_title = self._infer_title_from_text(first_page_text)
         if inferred_title and not metadata['embedded_title']:
             metadata['title'] = inferred_title
@@ -101,7 +167,47 @@ class PDFProcessor:
         year = self._infer_year_from_text(first_page_text)
         metadata['year'] = year
 
+        metadata['source'] = 'heuristic'
+
         return metadata
+
+    def _extract_doi(self, text: str) -> Optional[str]:
+        """
+        Extract DOI from text using regex patterns.
+
+        DOI format: 10.xxxx/yyyyy (where xxxx is 4+ digits)
+
+        Args:
+            text: Text to search for DOI
+
+        Returns:
+            DOI string or None
+        """
+        # DOI patterns (in order of specificity)
+        patterns = [
+            # Pattern 1: DOI with label
+            r'DOI[\s:]+(?:https?://(?:dx\.)?doi\.org/)?(\b10\.\d{4,}/[^\s]+)',
+
+            # Pattern 2: DOI URL
+            r'(?:https?://)?(?:dx\.)?doi\.org/(\b10\.\d{4,}/[^\s]+)',
+
+            # Pattern 3: DOI without label (in first 2000 chars only)
+            r'\b(10\.\d{4,}/[^\s<>]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text[:2000], re.IGNORECASE)
+            if match:
+                doi = match.group(1).strip()
+
+                # Clean up common trailing chars
+                doi = doi.rstrip('.,;:)]')
+
+                # Validate DOI format (basic check)
+                if re.match(r'^10\.\d{4,}/\S+', doi):
+                    return doi
+
+        return None
 
     def _infer_title_from_text(self, text: str) -> Optional[str]:
         """
