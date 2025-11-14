@@ -47,7 +47,18 @@ class SemanticScholarAPI:
         Args:
             api_key: Optional API key for higher rate limits
                     (free tier: 100 req/s, with key: 1000 req/s)
+                    If None, will try to load from config
         """
+        # Try to load API key from config if not provided
+        if api_key is None:
+            try:
+                from src.utils.config import get_config
+                api_key = get_config().get_semantic_scholar_api_key()
+                if api_key:
+                    print(f"✓ Loaded API key from config (...{api_key[-4:]})")
+            except:
+                pass
+
         self.api_key = api_key
         self.session = requests.Session()
         if api_key:

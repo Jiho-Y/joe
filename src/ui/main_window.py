@@ -23,6 +23,7 @@ from src.core.database import Database
 from src.core.pdf_processor import PDFProcessor
 from src.core.metadata_extractor import KeywordExtractor
 from src.models.paper import Paper
+from src.ui.settings_dialog import SettingsDialog
 
 
 class PDFImportThread(QThread):
@@ -52,9 +53,9 @@ class PDFImportThread(QThread):
                 filename = Path(pdf_path).name
                 self.progress.emit(int((i / total) * 100), f"Processing {filename}...")
 
-                # Extract text and metadata
+                # Extract text and metadata (with Semantic Scholar for accuracy)
                 with PDFProcessor(pdf_path) as processor:
-                    metadata = processor.extract_metadata()
+                    metadata = processor.extract_metadata(use_semantic_scholar=True)
                     full_text = processor.extract_text(max_pages=10)  # Limit for speed
 
                 # Add to database
@@ -63,10 +64,20 @@ class PDFImportThread(QThread):
                     pdf_path=pdf_path,
                     authors=metadata.get('authors'),
                     year=metadata.get('year'),
+                    journal=metadata.get('journal'),
+                    doi=metadata.get('doi'),
+                    arxiv_id=metadata.get('arxiv_id'),
                     abstract=metadata.get('abstract'),
                     num_pages=metadata['num_pages'],
                     file_size=metadata['file_size']
                 )
+
+                # Log metadata source for debugging
+                source = metadata.get('source', 'unknown')
+                if source == 'semantic_scholar':
+                    print(f"✓ {filename}: Metadata from Semantic Scholar")
+                else:
+                    print(f"⚠ {filename}: Using heuristic extraction")
 
                 # Extract keywords (YAKE for speed)
                 keywords = self.keyword_extractor.extract_from_paper(
@@ -219,6 +230,20 @@ class MainWindow(QMainWindow):
         view_network_action.setShortcut("Ctrl+N")
         view_network_action.triggered.connect(self.view_citation_network)
         tools_menu.addAction(view_network_action)
+
+        tools_menu.addSeparator()
+
+        diagnostics_action = QAction("Run Diagnostics...", self)
+        diagnostics_action.triggered.connect(self.run_diagnostics)
+        tools_menu.addAction(diagnostics_action)
+
+        # Settings menu
+        settings_menu = menubar.addMenu("Settings")
+
+        preferences_action = QAction("Preferences...", self)
+        preferences_action.setShortcut("Ctrl+,")
+        preferences_action.triggered.connect(self.open_settings)
+        settings_menu.addAction(preferences_action)
 
     def create_toolbar(self) -> QHBoxLayout:
         """Create toolbar with action buttons."""
@@ -441,6 +466,29 @@ class MainWindow(QMainWindow):
             self,
             "Citation Network",
             "Citation network visualization coming soon!"
+        )
+
+    def open_settings(self):
+        """Open settings dialog."""
+        dialog = SettingsDialog(self)
+        dialog.exec()
+
+    def run_diagnostics(self):
+        """Run diagnostic script."""
+        QMessageBox.information(
+            self,
+            "Run Diagnostics",
+            "To run comprehensive diagnostics:\n\n"
+            "Open terminal and run:\n"
+            "  python diagnose_and_fix.py\n\n"
+            "Available options:\n"
+            "  --re-extract    Re-extract metadata with Semantic Scholar\n"
+            "  --rebuild-index Rebuild search index\n\n"
+            "This will test:\n"
+            "• Semantic Scholar API connectivity\n"
+            "• Database contents and abstracts\n"
+            "• Search functionality\n"
+            "• And offer automated fixes"
         )
 
     def closeEvent(self, event):
