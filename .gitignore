@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# PyQt
+*.ui.py
+*.qrc.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Database
+data/papers.db
+data/papers.db-journal
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# PDFs (optional - uncomment if you don't want to track PDFs)
+# test_pdfs/*.pdf
+# data/pdfs/*.pdf
+
+# Large model files
+*.onnx
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
