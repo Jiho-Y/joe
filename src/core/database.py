@@ -64,9 +64,9 @@ class Database:
             )
         """)
 
-        # References table (parsed from PDF)
+        # PaperReferences table (parsed from PDF)
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS References (
+            CREATE TABLE IF NOT EXISTS PaperReferences (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 paper_id INTEGER NOT NULL,
                 raw_text TEXT NOT NULL,  -- Original reference string
@@ -283,7 +283,7 @@ class Database:
 
         for ref_text in references:
             cursor.execute("""
-                INSERT INTO References (paper_id, raw_text)
+                INSERT INTO PaperReferences (paper_id, raw_text)
                 VALUES (?, ?)
             """, (paper_id, ref_text))
 
