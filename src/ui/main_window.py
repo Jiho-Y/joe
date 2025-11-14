@@ -32,14 +32,17 @@ class PDFImportThread(QThread):
     finished = Signal(list)  # List of imported paper IDs
     error = Signal(str)
 
-    def __init__(self, pdf_paths: List[str], db: Database):
+    def __init__(self, pdf_paths: List[str], db_path: str = "data/papers.db"):
         super().__init__()
         self.pdf_paths = pdf_paths
-        self.db = db
+        self.db_path = db_path
         self.keyword_extractor = KeywordExtractor()
 
     def run(self):
         """Process PDFs in background."""
+        # Create new database connection in this thread
+        db = Database(self.db_path)
+
         imported_ids = []
         total = len(self.pdf_paths)
 
@@ -55,7 +58,7 @@ class PDFImportThread(QThread):
                     full_text = processor.extract_text(max_pages=10)  # Limit for speed
 
                 # Add to database
-                paper_id = self.db.add_paper(
+                paper_id = db.add_paper(
                     title=metadata['title'],
                     pdf_path=pdf_path,
                     authors=metadata.get('authors'),
@@ -75,16 +78,19 @@ class PDFImportThread(QThread):
                 )
 
                 # Save keywords
-                self.db.add_keywords(paper_id, keywords, method='yake')
+                db.add_keywords(paper_id, keywords, method='yake')
 
                 # Update full-text index
-                self.db.update_full_text_index(paper_id, full_text)
+                db.update_full_text_index(paper_id, full_text)
 
                 imported_ids.append(paper_id)
 
             except Exception as e:
                 self.error.emit(f"Error processing {filename}: {str(e)}")
                 continue
+
+        # Close database connection
+        db.close()
 
         self.progress.emit(100, "Import complete!")
         self.finished.emit(imported_ids)
@@ -93,9 +99,10 @@ class PDFImportThread(QThread):
 class MainWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self):
+    def __init__(self, db_path: str = "data/papers.db"):
         super().__init__()
-        self.db = Database()
+        self.db_path = db_path
+        self.db = Database(db_path)
         self.current_paper: Optional[Paper] = None
 
         self.init_ui()
@@ -251,8 +258,8 @@ class MainWindow(QMainWindow):
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
-        # Create import thread
-        self.import_thread = PDFImportThread(pdf_paths, self.db)
+        # Create import thread (pass db_path, not db object for thread safety)
+        self.import_thread = PDFImportThread(pdf_paths, self.db_path)
         self.import_thread.progress.connect(
             lambda pct, msg: (progress.setValue(pct), progress.setLabelText(msg))
         )
