@@ -22,8 +22,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.core.database import Database
 from src.core.pdf_processor import PDFProcessor
 from src.core.metadata_extractor import KeywordExtractor
+from src.core.citation_matcher import CitationMatcher
 from src.models.paper import Paper
 from src.ui.settings_dialog import SettingsDialog
+from src.ui.citation_network_dialog import CitationNetworkDialog
 
 
 class PDFImportThread(QThread):
@@ -53,10 +55,11 @@ class PDFImportThread(QThread):
                 filename = Path(pdf_path).name
                 self.progress.emit(int((i / total) * 100), f"Processing {filename}...")
 
-                # Extract text and metadata (with Semantic Scholar for accuracy)
+                # Extract text, metadata, and references
                 with PDFProcessor(pdf_path) as processor:
                     metadata = processor.extract_metadata(use_semantic_scholar=True)
                     full_text = processor.extract_text(max_pages=10)  # Limit for speed
+                    references = processor.extract_references()  # Extract references
 
                 # Add to database
                 paper_id = db.add_paper(
@@ -90,6 +93,11 @@ class PDFImportThread(QThread):
 
                 # Save keywords
                 db.add_keywords(paper_id, keywords, method='yake')
+
+                # Save references
+                if references:
+                    db.add_references(paper_id, references)
+                    print(f"  → Extracted {len(references)} references")
 
                 # Update full-text index
                 db.update_full_text_index(paper_id, full_text)
@@ -230,6 +238,11 @@ class MainWindow(QMainWindow):
         view_network_action.setShortcut("Ctrl+N")
         view_network_action.triggered.connect(self.view_citation_network)
         tools_menu.addAction(view_network_action)
+
+        match_citations_action = QAction("Match Citations...", self)
+        match_citations_action.setShortcut("Ctrl+M")
+        match_citations_action.triggered.connect(self.match_citations)
+        tools_menu.addAction(match_citations_action)
 
         tools_menu.addSeparator()
 
@@ -461,12 +474,71 @@ class MainWindow(QMainWindow):
 
     def view_citation_network(self):
         """View citation network visualization."""
-        # Placeholder - will be implemented in Week 4
-        QMessageBox.information(
+        try:
+            dialog = CitationNetworkDialog(self.db, self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Citation Network Error",
+                f"Failed to open citation network:\n{str(e)}"
+            )
+
+    def match_citations(self):
+        """Match references to papers in the database to build citation network."""
+        # Confirm with user
+        reply = QMessageBox.question(
             self,
-            "Citation Network",
-            "Citation network visualization coming soon!"
+            "Match Citations",
+            "This will attempt to match all references in your papers to create citation links.\n\n"
+            "Matching strategies:\n"
+            "• Exact DOI matching (highest confidence)\n"
+            "• Exact arXiv ID matching\n"
+            "• Title similarity matching\n\n"
+            "This may take a few moments. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
+
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        # Create progress dialog
+        progress = QProgressDialog("Matching citations...", "Cancel", 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+
+        try:
+            # Run citation matching
+            matcher = CitationMatcher(self.db)
+            stats = matcher.match_all_papers()
+
+            progress.close()
+
+            # Show results
+            result_message = (
+                f"Citation Matching Complete!\n\n"
+                f"Papers processed: {stats['total_papers_processed']}\n"
+                f"Total references: {stats['total_references']}\n"
+                f"Matched: {stats['total_matched']}\n"
+                f"Unmatched: {stats['total_unmatched']}\n\n"
+                f"Match confidence breakdown:\n"
+                f"  High (DOI/arXiv): {stats['confidence_breakdown']['high']}\n"
+                f"  Medium (strong title): {stats['confidence_breakdown']['medium']}\n"
+                f"  Low (weak title): {stats['confidence_breakdown']['low']}\n\n"
+                f"Papers with at least one match: {stats['papers_with_matches']}"
+            )
+
+            QMessageBox.information(self, "Citation Matching Results", result_message)
+
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(
+                self,
+                "Citation Matching Error",
+                f"Failed to match citations:\n{str(e)}"
+            )
 
     def open_settings(self):
         """Open settings dialog."""

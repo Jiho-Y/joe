@@ -377,23 +377,58 @@ class Database:
 
         return [(row['keyword'], row['score']) for row in cursor.fetchall()]
 
-    def add_references(self, paper_id: int, references: List[str]):
+    def add_references(self, paper_id: int, references: List[Dict]):
         """
-        Add references for a paper.
+        Add parsed references for a paper.
 
         Args:
             paper_id: Paper ID
-            references: List of raw reference strings
+            references: List of dictionaries with parsed reference data
+                        Each dict should have: raw_text, doi, arxiv_id, title, authors, year, journal
         """
         cursor = self.conn.cursor()
 
-        for ref_text in references:
+        for ref in references:
+            # Support both old format (string) and new format (dict)
+            if isinstance(ref, str):
+                ref = {'raw_text': ref}
+
             cursor.execute("""
-                INSERT INTO PaperReferences (paper_id, raw_text)
-                VALUES (?, ?)
-            """, (paper_id, ref_text))
+                INSERT INTO PaperReferences (
+                    paper_id, raw_text, parsed_title, parsed_authors,
+                    parsed_year, parsed_venue, parsed_doi
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                paper_id,
+                ref.get('raw_text', ''),
+                ref.get('title'),
+                ref.get('authors'),
+                ref.get('year'),
+                ref.get('journal'),
+                ref.get('doi')
+            ))
 
         self.conn.commit()
+
+    def get_references(self, paper_id: int) -> List[Dict]:
+        """
+        Get all references for a paper.
+
+        Args:
+            paper_id: Paper ID
+
+        Returns:
+            List of dictionaries with reference data
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM PaperReferences
+            WHERE paper_id = ?
+            ORDER BY id
+        """, (paper_id,))
+
+        return [dict(row) for row in cursor.fetchall()]
 
     def add_citation(
         self,

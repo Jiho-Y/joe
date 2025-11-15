@@ -487,38 +487,193 @@ class PDFProcessor:
 
         return None
 
-    def extract_references(self) -> List[str]:
+    def extract_references(self) -> List[Dict[str, any]]:
         """
-        Extract references section from PDF.
-        This is a basic extraction; GROBID will do structured parsing.
+        Extract and parse references section from PDF with enhanced detection.
+
+        Returns structured reference data including DOI, arXiv ID, title, authors, year.
 
         Returns:
-            List of reference strings
+            List of dictionaries with structured reference data
         """
-        # Get text from last 30% of document (references usually at end)
-        start_page = int(self.num_pages * 0.7)
+        # Get text from last 40% of document (references usually at end)
+        start_page = max(0, int(self.num_pages * 0.6))
         end_text = ""
 
         for page_num in range(start_page, self.num_pages):
             end_text += self.doc[page_num].get_text("text") + "\n"
 
-        # Find "References" section
-        ref_pattern = r'(?:references|REFERENCES|bibliography|BIBLIOGRAPHY)\s*\n(.+)'
-        match = re.search(ref_pattern, end_text, re.DOTALL | re.IGNORECASE)
+        # Find "References" section with multiple patterns
+        ref_patterns = [
+            r'(?:^|\n)(?:References|REFERENCES)\s*\n(.+)',
+            r'(?:^|\n)(?:Bibliography|BIBLIOGRAPHY)\s*\n(.+)',
+            r'(?:^|\n)(?:References and Notes|REFERENCES AND NOTES)\s*\n(.+)',
+            r'(?:^|\n)(?:Works Cited|WORKS CITED)\s*\n(.+)',
+            r'(?:^|\n)(?:Literature Cited|LITERATURE CITED)\s*\n(.+)',
+        ]
 
-        if not match:
+        ref_text = None
+        for pattern in ref_patterns:
+            match = re.search(pattern, end_text, re.DOTALL | re.IGNORECASE)
+            if match:
+                ref_text = match.group(1)
+                break
+
+        if not ref_text:
             return []
 
-        ref_text = match.group(1)
+        # Split by common reference numbering patterns
+        # Pattern 1: [1], [2], etc.
+        # Pattern 2: 1., 2., etc.
+        # Pattern 3: (1), (2), etc.
+        # Pattern 4: 1  (with double space)
+        split_patterns = [
+            r'\n\s*\[\d+\]\s*',
+            r'\n\s*\d+\.\s+',
+            r'\n\s*\(\d+\)\s*',
+            r'\n\s*\d+\s\s+',
+        ]
 
-        # Split by common reference patterns
-        # Pattern: [1], [2], etc. or 1., 2., etc.
-        references = re.split(r'\n\[\d+\]|\n\d+\.', ref_text)
+        raw_references = []
+        for pattern in split_patterns:
+            raw_references = re.split(pattern, ref_text)
+            if len(raw_references) > 3:  # Found good splits
+                break
 
-        # Clean and filter
-        references = [ref.strip() for ref in references if len(ref.strip()) > 50]
+        # If no good splits, try line-based approach
+        if len(raw_references) <= 3:
+            raw_references = ref_text.split('\n')
 
-        return references[:100]  # Limit to 100 references
+        # Parse each reference
+        parsed_references = []
+        for raw_ref in raw_references:
+            raw_ref = raw_ref.strip()
+
+            # Skip if too short or too long
+            if len(raw_ref) < 30 or len(raw_ref) > 2000:
+                continue
+
+            # Clean up multi-line references
+            raw_ref = re.sub(r'\s+', ' ', raw_ref)
+
+            # Parse structured data from this reference
+            parsed = self._parse_reference(raw_ref)
+            if parsed:
+                parsed_references.append(parsed)
+
+        return parsed_references[:200]  # Limit to 200 references
+
+    def _parse_reference(self, ref_text: str) -> Optional[Dict[str, any]]:
+        """
+        Parse a single reference string to extract structured metadata.
+
+        Args:
+            ref_text: Raw reference text
+
+        Returns:
+            Dictionary with parsed fields (doi, arxiv_id, title, authors, year, journal)
+        """
+        parsed = {
+            'raw_text': ref_text,
+            'doi': None,
+            'arxiv_id': None,
+            'title': None,
+            'authors': None,
+            'year': None,
+            'journal': None,
+        }
+
+        # Extract DOI
+        doi_patterns = [
+            r'(?:doi|DOI)[\s:]*(?:https?://(?:dx\.)?doi\.org/)?(\b10\.\d{4,9}/[^\s\)\],]+)',
+            r'(?:https?://)?(?:dx\.)?doi\.org/(\b10\.\d{4,9}/[^\s\)\],]+)',
+            r'\b(10\.\d{4,9}/[^\s<>\)\],]{6,})',
+        ]
+
+        for pattern in doi_patterns:
+            match = re.search(pattern, ref_text, re.IGNORECASE)
+            if match:
+                doi = match.group(1).strip()
+                doi = doi.rstrip('.,;:)]}\'"')
+                # Validate DOI format
+                if re.match(r'^10\.\d{4,9}/[a-zA-Z0-9\.\-_\(\)/]+$', doi):
+                    if 10 <= len(doi) <= 200:
+                        parsed['doi'] = doi
+                        break
+
+        # Extract arXiv ID
+        arxiv_patterns = [
+            r'arXiv[\s:]*(\d{4}\.\d{4,5}(?:v\d+)?)',
+            r'arxiv\.org/abs/(\d{4}\.\d{4,5}(?:v\d+)?)',
+            r'arxiv\.org/pdf/(\d{4}\.\d{4,5}(?:v\d+)?)',
+            r'\b(\d{4}\.\d{4,5}(?:v\d+)?)\b',  # Standalone arXiv ID
+        ]
+
+        for pattern in arxiv_patterns:
+            match = re.search(pattern, ref_text, re.IGNORECASE)
+            if match:
+                arxiv_id = match.group(1)
+                parsed['arxiv_id'] = arxiv_id
+                break
+
+        # Extract year (4-digit number)
+        year_patterns = [
+            r'\((\d{4})\)',  # (2020)
+            r',\s*(\d{4})',  # , 2020
+            r'\b(\d{4})\b',  # 2020
+        ]
+
+        for pattern in year_patterns:
+            matches = re.findall(pattern, ref_text)
+            for match in matches:
+                year = int(match)
+                if 1950 <= year <= 2030:  # Reasonable range
+                    parsed['year'] = year
+                    break
+            if parsed['year']:
+                break
+
+        # Extract title (text within quotes or after authors before year)
+        title_patterns = [
+            r'["""](.{20,200}?)["""]',  # Text in quotes
+            r'[\.,]\s+([A-Z][^\.]{20,200}?)\.',  # Title case sentence
+        ]
+
+        for pattern in title_patterns:
+            match = re.search(pattern, ref_text)
+            if match:
+                title = match.group(1).strip()
+                # Clean up
+                title = re.sub(r'\s+', ' ', title)
+                if len(title) >= 20:
+                    parsed['title'] = title
+                    break
+
+        # Extract journal/conference name (italicized or after "in")
+        journal_patterns = [
+            r'\bin\s+([A-Z][^,\.]{5,100}?)(?:\s+\d+|,|\.|$)',  # "in Journal Name"
+            r',\s+([A-Z][^,\.]{5,100}?),\s+\d+',  # ", Journal Name, vol"
+        ]
+
+        for pattern in journal_patterns:
+            match = re.search(pattern, ref_text)
+            if match:
+                journal = match.group(1).strip()
+                if len(journal) >= 5:
+                    parsed['journal'] = journal
+                    break
+
+        # Extract authors (first part before title or year, usually contains "and" or commas)
+        # This is heuristic-based and may not be perfect
+        authors_pattern = r'^(.{10,200}?)(?:,\s*["""]|,\s*\d{4}|\.\s+["""])'
+        match = re.search(authors_pattern, ref_text)
+        if match:
+            authors_text = match.group(1).strip()
+            # Clean up and validate
+            if ',' in authors_text or ' and ' in authors_text.lower():
+                parsed['authors'] = authors_text[:200]  # Limit length
+
+        return parsed
 
     def get_page_count(self) -> int:
         """Get number of pages in PDF."""
