@@ -28,6 +28,23 @@ from src.ui.settings_dialog import SettingsDialog
 from src.ui.citation_network_dialog import CitationNetworkDialog
 
 
+class NumericTableWidgetItem(QTableWidgetItem):
+    """QTableWidgetItem that sorts numerically instead of alphabetically."""
+
+    def __lt__(self, other):
+        """Compare items numerically for sorting."""
+        # Get numeric values from UserRole data
+        self_value = self.data(Qt.ItemDataRole.UserRole)
+        other_value = other.data(Qt.ItemDataRole.UserRole)
+
+        # If both are numbers, compare numerically
+        if isinstance(self_value, (int, float)) and isinstance(other_value, (int, float)):
+            return self_value < other_value
+
+        # Otherwise, fall back to string comparison
+        return super().__lt__(other)
+
+
 class PDFImportThread(QThread):
     """Background thread for importing PDFs."""
 
@@ -172,7 +189,10 @@ class MainWindow(QMainWindow):
         self.paper_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.paper_table.itemSelectionChanged.connect(self.on_paper_selected)
 
-        # Enable drag and drop for reordering
+        # Enable sorting by clicking column headers
+        self.paper_table.setSortingEnabled(True)
+
+        # Enable drag and drop for manual reordering
         self.paper_table.setDragEnabled(True)
         self.paper_table.setAcceptDrops(True)
         self.paper_table.setDragDropMode(QTableWidget.DragDropMode.InternalMove)
@@ -281,6 +301,30 @@ class MainWindow(QMainWindow):
         diagnostics_action.triggered.connect(self.run_diagnostics)
         tools_menu.addAction(diagnostics_action)
 
+        # View menu
+        view_menu = menubar.addMenu("View")
+
+        sort_by_title_action = QAction("Sort by Title", self)
+        sort_by_title_action.triggered.connect(lambda: self.sort_papers(0))
+        view_menu.addAction(sort_by_title_action)
+
+        sort_by_authors_action = QAction("Sort by Authors", self)
+        sort_by_authors_action.triggered.connect(lambda: self.sort_papers(1))
+        view_menu.addAction(sort_by_authors_action)
+
+        sort_by_year_action = QAction("Sort by Year", self)
+        sort_by_year_action.triggered.connect(lambda: self.sort_papers(2))
+        view_menu.addAction(sort_by_year_action)
+
+        view_menu.addSeparator()
+
+        sort_ascending_action = QAction("Sort Ascending", self)
+        sort_ascending_action.setCheckable(True)
+        sort_ascending_action.setChecked(True)
+        sort_ascending_action.triggered.connect(self.toggle_sort_order)
+        view_menu.addAction(sort_ascending_action)
+        self.sort_ascending_action = sort_ascending_action
+
         # Settings menu
         settings_menu = menubar.addMenu("Settings")
 
@@ -359,27 +403,36 @@ class MainWindow(QMainWindow):
         """Load all papers from database and populate table."""
         papers = self.db.get_all_papers()
 
+        # Temporarily disable sorting for faster loading
+        self.paper_table.setSortingEnabled(False)
         self.paper_table.setRowCount(len(papers))
 
         for row, paper_dict in enumerate(papers):
             paper = Paper.from_dict(paper_dict)
 
             # Title
-            self.paper_table.setItem(row, 0, QTableWidgetItem(paper.title))
+            title_item = QTableWidgetItem(paper.title)
+            title_item.setData(Qt.ItemDataRole.UserRole, paper.id)  # Store paper ID
+            self.paper_table.setItem(row, 0, title_item)
 
             # Authors
-            self.paper_table.setItem(row, 1, QTableWidgetItem(paper.author_string))
+            authors_item = QTableWidgetItem(paper.author_string)
+            self.paper_table.setItem(row, 1, authors_item)
 
-            # Year
-            self.paper_table.setItem(row, 2, QTableWidgetItem(paper.year_string))
+            # Year - use NumericTableWidgetItem for proper numeric sorting
+            year_item = NumericTableWidgetItem(paper.year_string)
+            # Store numeric year for sorting (0 if no year, will sort to top)
+            year_item.setData(Qt.ItemDataRole.UserRole, paper_dict.get('year') or 0)
+            self.paper_table.setItem(row, 2, year_item)
 
             # Keywords
             keywords = self.db.get_keywords(paper.id)
             keyword_str = ", ".join([kw for kw, _ in keywords[:3]])
-            self.paper_table.setItem(row, 3, QTableWidgetItem(keyword_str))
+            keyword_item = QTableWidgetItem(keyword_str)
+            self.paper_table.setItem(row, 3, keyword_item)
 
-            # Store paper ID in row
-            self.paper_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, paper.id)
+        # Re-enable sorting
+        self.paper_table.setSortingEnabled(True)
 
         self.statusBar().showMessage(f"Loaded {len(papers)} paper(s)")
 
@@ -738,6 +791,29 @@ class MainWindow(QMainWindow):
         """Update window title with current library name."""
         db_name = Path(self.db_path).stem
         self.setWindowTitle(f"Research Paper Manager - {db_name}")
+
+    def sort_papers(self, column: int):
+        """
+        Sort papers by the specified column.
+
+        Args:
+            column: Column index (0=Title, 1=Authors, 2=Year, 3=Keywords)
+        """
+        # Get current sort order
+        order = Qt.SortOrder.AscendingOrder if self.sort_ascending_action.isChecked() else Qt.SortOrder.DescendingOrder
+
+        # Sort the table
+        self.paper_table.sortItems(column, order)
+
+        # Update status bar
+        column_names = ["Title", "Authors", "Year", "Keywords"]
+        order_str = "ascending" if order == Qt.SortOrder.AscendingOrder else "descending"
+        self.statusBar().showMessage(f"Sorted by {column_names[column]} ({order_str})")
+
+    def toggle_sort_order(self):
+        """Toggle between ascending and descending sort order."""
+        is_ascending = self.sort_ascending_action.isChecked()
+        self.sort_ascending_action.setText("Sort Ascending" if is_ascending else "Sort Descending")
 
     def closeEvent(self, event):
         """Handle window close event."""
