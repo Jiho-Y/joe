@@ -7,10 +7,11 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QFileDialog, QMessageBox, QLineEdit, QLabel,
-    QSplitter, QTextEdit, QListWidget, QProgressDialog
+    QSplitter, QTextEdit, QListWidget, QProgressDialog,
+    QGroupBox, QToolBar, QFrame
 )
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import Qt, QThread, Signal, QUrl
+from PySide6.QtGui import QAction, QKeySequence, QDesktopServices, QIcon
 from pathlib import Path
 from typing import List, Optional
 import sys
@@ -189,6 +190,9 @@ class MainWindow(QMainWindow):
         self.paper_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.paper_table.itemSelectionChanged.connect(self.on_paper_selected)
 
+        # Double-click to open PDF
+        self.paper_table.doubleClicked.connect(self.open_pdf_preview)
+
         # Enable sorting by clicking column headers
         self.paper_table.setSortingEnabled(True)
 
@@ -334,25 +338,61 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(preferences_action)
 
     def create_toolbar(self) -> QHBoxLayout:
-        """Create toolbar with action buttons."""
+        """Create toolbar with logically grouped action buttons."""
         layout = QHBoxLayout()
 
-        add_btn = QPushButton("Add PDFs")
+        # File Operations Group
+        file_group = QGroupBox("File Operations")
+        file_layout = QHBoxLayout()
+
+        add_btn = QPushButton("➕ Import PDFs")
+        add_btn.setToolTip("Import PDF files into library (Ctrl+I)")
         add_btn.clicked.connect(self.import_pdfs)
 
-        delete_btn = QPushButton("Delete Paper")
-        delete_btn.clicked.connect(self.delete_selected_paper)
-
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.load_papers)
-
-        export_btn = QPushButton("Export BibTeX")
+        export_btn = QPushButton("📤 Export BibTeX")
+        export_btn.setToolTip("Export selected papers to BibTeX format (Ctrl+E)")
         export_btn.clicked.connect(self.export_bibtex)
 
-        layout.addWidget(add_btn)
-        layout.addWidget(delete_btn)
-        layout.addWidget(refresh_btn)
-        layout.addWidget(export_btn)
+        file_layout.addWidget(add_btn)
+        file_layout.addWidget(export_btn)
+        file_group.setLayout(file_layout)
+
+        # Paper Management Group
+        paper_group = QGroupBox("Paper Management")
+        paper_layout = QHBoxLayout()
+
+        open_btn = QPushButton("🔍 Open PDF")
+        open_btn.setToolTip("Open selected PDF in Preview (Double-click or press Space)")
+        open_btn.clicked.connect(self.open_pdf_preview)
+
+        delete_btn = QPushButton("🗑️ Delete")
+        delete_btn.setToolTip("Delete selected paper (Delete key)")
+        delete_btn.clicked.connect(self.delete_selected_paper)
+
+        paper_layout.addWidget(open_btn)
+        paper_layout.addWidget(delete_btn)
+        paper_group.setLayout(paper_layout)
+
+        # View Group
+        view_group = QGroupBox("View")
+        view_layout = QHBoxLayout()
+
+        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setToolTip("Reload papers from database")
+        refresh_btn.clicked.connect(self.load_papers)
+
+        network_btn = QPushButton("🕸️ Citation Network")
+        network_btn.setToolTip("View citation network (Ctrl+N)")
+        network_btn.clicked.connect(self.view_citation_network)
+
+        view_layout.addWidget(refresh_btn)
+        view_layout.addWidget(network_btn)
+        view_group.setLayout(view_layout)
+
+        # Add groups to main layout
+        layout.addWidget(file_group)
+        layout.addWidget(paper_group)
+        layout.addWidget(view_group)
         layout.addStretch()
 
         return layout
@@ -814,6 +854,84 @@ class MainWindow(QMainWindow):
         """Toggle between ascending and descending sort order."""
         is_ascending = self.sort_ascending_action.isChecked()
         self.sort_ascending_action.setText("Sort Ascending" if is_ascending else "Sort Descending")
+
+    def open_pdf_preview(self):
+        """Open selected PDF in system default viewer (Mac Preview)."""
+        selected_items = self.paper_table.selectedItems()
+        if not selected_items:
+            QMessageBox.information(
+                self,
+                "No Selection",
+                "Please select a paper to open."
+            )
+            return
+
+        # Get paper ID from first column
+        row = self.paper_table.currentRow()
+        if row < 0:
+            return
+
+        title_item = self.paper_table.item(row, 0)
+        if not title_item:
+            return
+
+        paper_id = title_item.data(Qt.ItemDataRole.UserRole)
+        paper_dict = self.db.get_paper(paper_id)
+
+        if not paper_dict:
+            QMessageBox.warning(
+                self,
+                "Paper Not Found",
+                "Could not find paper in database."
+            )
+            return
+
+        pdf_path = paper_dict.get('pdf_path')
+        if not pdf_path or not Path(pdf_path).exists():
+            QMessageBox.warning(
+                self,
+                "PDF Not Found",
+                f"PDF file not found:\n{pdf_path}\n\n"
+                f"The file may have been moved or deleted."
+            )
+            return
+
+        # Open PDF with system default application
+        # On Mac: Preview
+        # On Windows: Default PDF viewer
+        # On Linux: Default PDF viewer
+        try:
+            url = QUrl.fromLocalFile(str(Path(pdf_path).resolve()))
+            success = QDesktopServices.openUrl(url)
+
+            if not success:
+                QMessageBox.critical(
+                    self,
+                    "Open Failed",
+                    f"Failed to open PDF:\n{pdf_path}\n\n"
+                    f"Please check if you have a PDF viewer installed."
+                )
+            else:
+                self.statusBar().showMessage(f"Opened: {Path(pdf_path).name}", 3000)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Error opening PDF:\n{str(e)}"
+            )
+
+    def keyPressEvent(self, event):
+        """Handle key press events."""
+        # Space key to open PDF
+        if event.key() == Qt.Key.Key_Space:
+            if self.paper_table.hasFocus():
+                self.open_pdf_preview()
+                event.accept()
+                return
+
+        # Pass other events to parent
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         """Handle window close event."""
