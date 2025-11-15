@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QSplitter, QTextEdit, QListWidget, QProgressDialog
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence
 from pathlib import Path
 from typing import List, Optional
 import sys
@@ -172,6 +172,12 @@ class MainWindow(QMainWindow):
         self.paper_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.paper_table.itemSelectionChanged.connect(self.on_paper_selected)
 
+        # Enable drag and drop for reordering
+        self.paper_table.setDragEnabled(True)
+        self.paper_table.setAcceptDrops(True)
+        self.paper_table.setDragDropMode(QTableWidget.DragDropMode.InternalMove)
+        self.paper_table.setDefaultDropAction(Qt.DropAction.MoveAction)
+
         # Right: Paper details
         details_widget = QWidget()
         details_layout = QVBoxLayout(details_widget)
@@ -211,33 +217,46 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
 
         new_library_action = QAction("New Library...", self)
-        new_library_action.setShortcut("Ctrl+Shift+N")
+        new_library_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
         new_library_action.triggered.connect(self.new_library)
         file_menu.addAction(new_library_action)
 
         open_library_action = QAction("Open Library...", self)
-        open_library_action.setShortcut("Ctrl+Shift+O")
+        open_library_action.setShortcut(QKeySequence.StandardKey.Open)  # Cmd+O on Mac, Ctrl+O on others
         open_library_action.triggered.connect(self.open_library)
         file_menu.addAction(open_library_action)
 
         file_menu.addSeparator()
 
         import_action = QAction("Import PDFs...", self)
-        import_action.setShortcut("Ctrl+O")
+        import_action.setShortcut(QKeySequence("Ctrl+I"))
         import_action.triggered.connect(self.import_pdfs)
         file_menu.addAction(import_action)
 
         export_bibtex_action = QAction("Export to BibTeX...", self)
-        export_bibtex_action.setShortcut("Ctrl+E")
+        export_bibtex_action.setShortcut(QKeySequence("Ctrl+E"))
         export_bibtex_action.triggered.connect(self.export_bibtex)
         file_menu.addAction(export_bibtex_action)
 
         file_menu.addSeparator()
 
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
+        close_window_action = QAction("Close Window", self)
+        close_window_action.setShortcut(QKeySequence.StandardKey.Close)  # Cmd+W on Mac
+        close_window_action.triggered.connect(self.close)
+        file_menu.addAction(close_window_action)
+
+        exit_action = QAction("Quit", self)
+        exit_action.setShortcut(QKeySequence.StandardKey.Quit)  # Cmd+Q on Mac, Ctrl+Q on others
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        # Edit menu
+        edit_menu = menubar.addMenu("Edit")
+
+        delete_action = QAction("Delete Paper", self)
+        delete_action.setShortcut(QKeySequence.StandardKey.Delete)  # Delete key or Cmd+Backspace on Mac
+        delete_action.triggered.connect(self.delete_selected_paper)
+        edit_menu.addAction(delete_action)
 
         # Tools menu
         tools_menu = menubar.addMenu("Tools")

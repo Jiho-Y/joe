@@ -35,12 +35,12 @@ class CitationNetworkDialog(QDialog):
     def init_ui(self):
         """Initialize the user interface."""
         self.setWindowTitle("Citation Network")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1200, 800)
 
         layout = QVBoxLayout(self)
 
         # Info label
-        info_label = QLabel("Citation network shows relationships between papers")
+        info_label = QLabel("Citation network - Use mouse wheel to zoom, drag to pan")
         layout.addWidget(info_label)
 
         # Controls
@@ -48,11 +48,14 @@ class CitationNetworkDialog(QDialog):
         layout.addLayout(controls_layout)
 
         # Matplotlib figure
-        self.figure = Figure(figsize=(10, 8))
+        self.figure = Figure(figsize=(12, 10))
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # Navigation toolbar
+        # Enable mouse wheel zoom
+        self.canvas.mpl_connect('scroll_event', self.on_scroll)
+
+        # Navigation toolbar (already has zoom/pan)
         self.toolbar = NavigationToolbar(self.canvas, self)
 
         layout.addWidget(self.toolbar)
@@ -133,6 +136,25 @@ class CitationNetworkDialog(QDialog):
         filter_group.setLayout(filter_form)
         layout.addWidget(filter_group)
 
+        # Zoom controls
+        zoom_group = QGroupBox("Zoom")
+        zoom_layout = QVBoxLayout()
+
+        zoom_in_btn = QPushButton("+ Zoom In")
+        zoom_in_btn.clicked.connect(self.zoom_in)
+        zoom_layout.addWidget(zoom_in_btn)
+
+        zoom_out_btn = QPushButton("- Zoom Out")
+        zoom_out_btn.clicked.connect(self.zoom_out)
+        zoom_layout.addWidget(zoom_out_btn)
+
+        reset_zoom_btn = QPushButton("Reset View")
+        reset_zoom_btn.clicked.connect(self.reset_zoom)
+        zoom_layout.addWidget(reset_zoom_btn)
+
+        zoom_group.setLayout(zoom_layout)
+        layout.addWidget(zoom_group)
+
         layout.addStretch()
 
         return layout
@@ -152,10 +174,11 @@ class CitationNetworkDialog(QDialog):
             paper_id = paper['id']
             self.papers_map[paper_id] = paper
 
-            # Node attributes
+            # Node attributes - truncate title for display
+            display_title = self._truncate_title(paper['title'], max_length=25)
             self.graph.add_node(
                 paper_id,
-                title=paper['title'][:50],  # Truncate for display
+                title=display_title,
                 year=paper.get('year', 0),
                 full_title=paper['title']
             )
@@ -274,15 +297,28 @@ class CitationNetworkDialog(QDialog):
                 ax=ax
             )
 
-        # Draw labels
+        # Draw labels - adjust font size based on number of nodes
         if self.show_labels_check.isChecked():
             labels = {node: filtered_graph.nodes[node]['title']
                       for node in filtered_graph.nodes()}
+
+            # Dynamic font size based on node count
+            num_nodes = filtered_graph.number_of_nodes()
+            if num_nodes < 20:
+                font_size = 9
+            elif num_nodes < 50:
+                font_size = 7
+            elif num_nodes < 100:
+                font_size = 6
+            else:
+                font_size = 5
+
             nx.draw_networkx_labels(
                 filtered_graph, pos,
                 labels,
-                font_size=8,
+                font_size=font_size,
                 font_color='black',
+                font_weight='bold',
                 ax=ax
             )
 
@@ -406,3 +442,90 @@ class CitationNetworkDialog(QDialog):
                     "Export Failed",
                     f"Failed to export graph:\n{str(e)}"
                 )
+
+    def zoom_in(self):
+        """Zoom in on the graph."""
+        ax = self.figure.gca()
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+
+        # Zoom in by 20%
+        x_center = (xlim[0] + xlim[1]) / 2
+        y_center = (ylim[0] + ylim[1]) / 2
+        x_range = (xlim[1] - xlim[0]) * 0.4
+        y_range = (ylim[1] - ylim[0]) * 0.4
+
+        ax.set_xlim(x_center - x_range, x_center + x_range)
+        ax.set_ylim(y_center - y_range, y_center + y_range)
+        self.canvas.draw()
+
+    def zoom_out(self):
+        """Zoom out on the graph."""
+        ax = self.figure.gca()
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+
+        # Zoom out by 20%
+        x_center = (xlim[0] + xlim[1]) / 2
+        y_center = (ylim[0] + ylim[1]) / 2
+        x_range = (xlim[1] - xlim[0]) * 0.625
+        y_range = (ylim[1] - ylim[0]) * 0.625
+
+        ax.set_xlim(x_center - x_range, x_center + x_range)
+        ax.set_ylim(y_center - y_range, y_center + y_range)
+        self.canvas.draw()
+
+    def reset_zoom(self):
+        """Reset zoom to show entire graph."""
+        ax = self.figure.gca()
+        ax.autoscale()
+        self.canvas.draw()
+
+    def on_scroll(self, event):
+        """Handle mouse wheel scroll for zooming."""
+        if event.inaxes is None:
+            return
+
+        ax = event.inaxes
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+
+        # Get mouse position
+        x_data = event.xdata
+        y_data = event.ydata
+
+        # Zoom factor
+        if event.button == 'up':
+            scale_factor = 0.9  # Zoom in
+        elif event.button == 'down':
+            scale_factor = 1.1  # Zoom out
+        else:
+            return
+
+        # Calculate new limits centered on mouse position
+        x_range = (xlim[1] - xlim[0]) * scale_factor / 2
+        y_range = (ylim[1] - ylim[0]) * scale_factor / 2
+
+        ax.set_xlim(x_data - x_range, x_data + x_range)
+        ax.set_ylim(y_data - y_range, y_data + y_range)
+        self.canvas.draw()
+
+    def _truncate_title(self, title: str, max_length: int = 25) -> str:
+        """
+        Truncate title to fit in node display.
+
+        Args:
+            title: Full title
+            max_length: Maximum characters
+
+        Returns:
+            Truncated title with ellipsis if needed
+        """
+        if not title:
+            return ""
+
+        if len(title) <= max_length:
+            return title
+
+        # Truncate and add ellipsis
+        return title[:max_length-3] + "..."
