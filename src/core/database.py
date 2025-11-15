@@ -531,6 +531,38 @@ class Database:
 
         self.conn.commit()
 
+    def delete_paper(self, paper_id: int) -> bool:
+        """
+        Delete a paper and all associated data.
+
+        Due to CASCADE DELETE constraints:
+        - Keywords will be deleted automatically
+        - PaperReferences will be deleted automatically
+        - Citations (both citing and cited) will be deleted automatically
+        - FullTextIndex entry will need manual deletion
+
+        Args:
+            paper_id: Paper ID to delete
+
+        Returns:
+            True if deleted successfully, False if paper not found
+        """
+        cursor = self.conn.cursor()
+
+        # Check if paper exists
+        cursor.execute("SELECT id FROM Papers WHERE id = ?", (paper_id,))
+        if not cursor.fetchone():
+            return False
+
+        # Delete from FullTextIndex (not covered by CASCADE)
+        cursor.execute("DELETE FROM FullTextIndex WHERE paper_id = ?", (paper_id,))
+
+        # Delete from Papers table (CASCADE will handle related tables)
+        cursor.execute("DELETE FROM Papers WHERE id = ?", (paper_id,))
+
+        self.conn.commit()
+        return True
+
     def close(self):
         """Close database connection."""
         self.conn.close()

@@ -231,12 +231,17 @@ class CitationNetworkDialog(QDialog):
                       for node in filtered_graph.nodes()]
 
         # Node colors based on year
-        years = [filtered_graph.nodes[node].get('year', 2000) for node in filtered_graph.nodes()]
+        years = [filtered_graph.nodes[node].get('year') or 0 for node in filtered_graph.nodes()]
         if years:
-            min_year = min(y for y in years if y > 0) if any(y > 0 for y in years) else 2000
-            max_year = max(years) if max(years) > 0 else 2024
-            year_range = max(max_year - min_year, 1)
-            node_colors = [(y - min_year) / year_range if y > 0 else 0.5 for y in years]
+            # Filter out None and 0 values for min/max calculation
+            valid_years = [y for y in years if y and y > 0]
+            if valid_years:
+                min_year = min(valid_years)
+                max_year = max(valid_years)
+                year_range = max(max_year - min_year, 1)
+                node_colors = [(y - min_year) / year_range if y and y > 0 else 0.5 for y in years]
+            else:
+                node_colors = [0.5] * len(filtered_graph.nodes())
         else:
             node_colors = [0.5] * len(filtered_graph.nodes())
 

@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         """Initialize the user interface."""
-        self.setWindowTitle("Research Paper Manager")
+        self.update_window_title()
         self.setGeometry(100, 100, 1400, 900)
 
         # Create menu bar
@@ -210,6 +210,18 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("File")
 
+        new_library_action = QAction("New Library...", self)
+        new_library_action.setShortcut("Ctrl+Shift+N")
+        new_library_action.triggered.connect(self.new_library)
+        file_menu.addAction(new_library_action)
+
+        open_library_action = QAction("Open Library...", self)
+        open_library_action.setShortcut("Ctrl+Shift+O")
+        open_library_action.triggered.connect(self.open_library)
+        file_menu.addAction(open_library_action)
+
+        file_menu.addSeparator()
+
         import_action = QAction("Import PDFs...", self)
         import_action.setShortcut("Ctrl+O")
         import_action.triggered.connect(self.import_pdfs)
@@ -265,6 +277,9 @@ class MainWindow(QMainWindow):
         add_btn = QPushButton("Add PDFs")
         add_btn.clicked.connect(self.import_pdfs)
 
+        delete_btn = QPushButton("Delete Paper")
+        delete_btn.clicked.connect(self.delete_selected_paper)
+
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self.load_papers)
 
@@ -272,6 +287,7 @@ class MainWindow(QMainWindow):
         export_btn.clicked.connect(self.export_bibtex)
 
         layout.addWidget(add_btn)
+        layout.addWidget(delete_btn)
         layout.addWidget(refresh_btn)
         layout.addWidget(export_btn)
         layout.addStretch()
@@ -562,6 +578,147 @@ class MainWindow(QMainWindow):
             "• Search functionality\n"
             "• And offer automated fixes"
         )
+
+    def delete_selected_paper(self):
+        """Delete the currently selected paper."""
+        selected_items = self.paper_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(
+                self,
+                "No Selection",
+                "Please select a paper to delete."
+            )
+            return
+
+        # Get selected row
+        row = self.paper_table.currentRow()
+        if row < 0:
+            return
+
+        # Get paper ID from row (stored as hidden data)
+        paper_id_item = self.paper_table.item(row, 0)
+        if not paper_id_item:
+            return
+
+        # Get paper title for confirmation
+        title = paper_id_item.text()
+
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete this paper?\n\n"
+            f"Title: {title}\n\n"
+            f"This will also delete:\n"
+            f"• All keywords\n"
+            f"• All references\n"
+            f"• All citation relationships\n"
+            f"• Full-text index\n\n"
+            f"This action cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        # Get paper ID from the row's user data
+        # We need to store paper_id when loading papers
+        paper_id = paper_id_item.data(Qt.ItemDataRole.UserRole)
+
+        if not paper_id:
+            QMessageBox.critical(self, "Error", "Could not determine paper ID.")
+            return
+
+        # Delete from database
+        success = self.db.delete_paper(paper_id)
+
+        if success:
+            # Remove from table
+            self.paper_table.removeRow(row)
+            # Clear details panel
+            self.paper_details.clear()
+            self.keywords_list.clear()
+            QMessageBox.information(
+                self,
+                "Deleted",
+                f"Paper deleted successfully."
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                "Error",
+                "Failed to delete paper."
+            )
+
+    def new_library(self):
+        """Create a new library database."""
+        file_dialog = QFileDialog()
+        new_db_path, _ = file_dialog.getSaveFileName(
+            self,
+            "Create New Library",
+            "data/",
+            "Database Files (*.db)"
+        )
+
+        if not new_db_path:
+            return
+
+        # Ensure .db extension
+        if not new_db_path.endswith('.db'):
+            new_db_path += '.db'
+
+        # Close current database
+        self.db.close()
+
+        # Create new database
+        self.db_path = new_db_path
+        self.db = Database(new_db_path)
+
+        # Update UI
+        self.update_window_title()
+        self.load_papers()
+
+        QMessageBox.information(
+            self,
+            "New Library",
+            f"New library created:\n{Path(new_db_path).name}"
+        )
+
+    def open_library(self):
+        """Open an existing library database."""
+        file_dialog = QFileDialog()
+        db_path, _ = file_dialog.getOpenFileName(
+            self,
+            "Open Library",
+            "data/",
+            "Database Files (*.db)"
+        )
+
+        if not db_path:
+            return
+
+        # Close current database
+        self.db.close()
+
+        # Open new database
+        self.db_path = db_path
+        self.db = Database(db_path)
+
+        # Update UI
+        self.update_window_title()
+        self.load_papers()
+
+        QMessageBox.information(
+            self,
+            "Library Opened",
+            f"Opened library:\n{Path(db_path).name}"
+        )
+
+    def update_window_title(self):
+        """Update window title with current library name."""
+        db_name = Path(self.db_path).stem
+        self.setWindowTitle(f"Research Paper Manager - {db_name}")
 
     def closeEvent(self, event):
         """Handle window close event."""
