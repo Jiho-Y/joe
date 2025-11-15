@@ -1,11 +1,14 @@
 """
 Metadata extraction using NLP techniques.
-Includes keyword extraction using YAKE and KeyBERT.
+Includes keyword extraction using YAKE, KeyBERT, and ML-based ranking.
 """
 
 import yake
 from typing import List, Tuple, Optional
 import re
+import pickle
+import numpy as np
+from pathlib import Path
 
 
 class KeywordExtractor:
@@ -27,6 +30,10 @@ class KeywordExtractor:
 
         # KeyBERT will be initialized lazily (requires model download)
         self._keybert_extractor = None
+
+        # ML model will be loaded lazily (if trained)
+        self._ml_model = None
+        self._ml_model_loaded = False
 
     def extract_yake(
         self,
@@ -124,6 +131,165 @@ class KeywordExtractor:
             print(f"KeyBERT extraction failed: {e}")
             return self.extract_yake(text, top_n)
 
+    def extract_ml(
+        self,
+        title: str,
+        abstract: Optional[str],
+        full_text: Optional[str],
+        top_n: int = 10
+    ) -> List[Tuple[str, float]]:
+        """
+        Extract keywords using ML-based ranking (if model is trained).
+
+        Args:
+            title: Paper title
+            abstract: Paper abstract
+            full_text: Full paper text
+            top_n: Number of keywords
+
+        Returns:
+            List of (keyword, score) tuples
+        """
+        # Load ML model lazily
+        if not self._ml_model_loaded:
+            model_path = Path("models/keyword_ranker.pkl")
+            if model_path.exists():
+                try:
+                    with open(model_path, 'rb') as f:
+                        self._ml_model = pickle.load(f)
+                    print("✓ Loaded ML keyword ranker model")
+                except Exception as e:
+                    print(f"⚠ ML model load failed: {e}")
+                    self._ml_model = None
+            else:
+                print("⚠ ML model not found. Train with: python train_keyword_model.py --train")
+                self._ml_model = None
+
+            self._ml_model_loaded = True
+
+        # If no model, fallback to YAKE
+        if self._ml_model is None:
+            print("⚠ Falling back to YAKE")
+            combined_text = (title * 5) + (abstract * 3 if abstract else '') + (full_text[:8000] if full_text else '')
+            return self.extract_yake(combined_text, top_n)
+
+        # Step 1: Extract candidates using YAKE
+        combined_text = (title * 5) + (abstract * 3 if abstract else '') + (full_text[:8000] if full_text else '')
+        candidates = self.extract_yake(combined_text, top_n=30)
+
+        if not candidates:
+            return []
+
+        # Step 2: Extract features for each candidate
+        scored_candidates = []
+
+        for candidate, yake_score in candidates:
+            features = self._extract_ml_features(
+                candidate, title, abstract or '', full_text or '',
+                yake_score, candidates
+            )
+
+            # Step 3: Get ML probability
+            try:
+                prob = self._ml_model.predict_proba([features])[0][1]
+                scored_candidates.append((candidate, prob))
+            except Exception as e:
+                # If ML fails, use YAKE score
+                scored_candidates.append((candidate, 1.0 - yake_score))
+
+        # Step 4: Sort by ML probability (descending)
+        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+
+        # Step 5: Return top N
+        return scored_candidates[:top_n]
+
+    def _extract_ml_features(
+        self,
+        candidate: str,
+        title: str,
+        abstract: str,
+        full_text: str,
+        yake_score: float,
+        all_candidates: List[Tuple[str, float]]
+    ) -> np.ndarray:
+        """
+        Extract 12-dimensional feature vector for ML model.
+        (Same features as in train_keyword_model.py)
+        """
+        features = []
+
+        # Normalize texts
+        title_lower = title.lower()
+        abstract_lower = abstract.lower()
+        full_text_lower = full_text.lower()
+        candidate_lower = candidate.lower()
+
+        # Feature 1: YAKE score (normalized 0-1, inverted)
+        max_yake = max(score for _, score in all_candidates) if all_candidates else 1.0
+        yake_norm = 1.0 - (yake_score / max_yake) if max_yake > 0 else 0.5
+        features.append(yake_norm)
+
+        # Feature 2: In title (binary)
+        in_title = 1.0 if candidate_lower in title_lower else 0.0
+        features.append(in_title)
+
+        # Feature 3: Title overlap ratio
+        candidate_words = set(candidate_lower.split())
+        title_words = set(title_lower.split())
+        title_overlap = len(candidate_words & title_words) / len(candidate_words) if candidate_words else 0.0
+        features.append(title_overlap)
+
+        # Feature 4: Abstract frequency (normalized)
+        abstract_freq = abstract_lower.count(candidate_lower)
+        abstract_freq_norm = min(abstract_freq / 5.0, 1.0)
+        features.append(abstract_freq_norm)
+
+        # Feature 5: Full text frequency (normalized)
+        full_freq = full_text_lower.count(candidate_lower)
+        full_freq_norm = min(full_freq / 20.0, 1.0)
+        features.append(full_freq_norm)
+
+        # Feature 6: N-gram size
+        ngram_size = len(candidate.split())
+        ngram_feature = ngram_size / 3.0
+        features.append(ngram_feature)
+
+        # Feature 7: Keyword length
+        length_norm = min(len(candidate) / 30.0, 1.0)
+        features.append(length_norm)
+
+        # Feature 8: Capital letter ratio
+        capitals = sum(1 for c in candidate if c.isupper())
+        capital_ratio = capitals / len(candidate) if len(candidate) > 0 else 0.0
+        features.append(capital_ratio)
+
+        # Feature 9: Alphanumeric ratio
+        alphanum = sum(1 for c in candidate if c.isalnum())
+        alphanum_ratio = alphanum / len(candidate) if len(candidate) > 0 else 0.0
+        features.append(alphanum_ratio)
+
+        # Feature 10: Position in document
+        if full_text:
+            first_pos = full_text_lower.find(candidate_lower)
+            position_score = 1.0 - (first_pos / len(full_text_lower)) if first_pos >= 0 else 0.0
+        else:
+            position_score = 0.5
+        features.append(position_score)
+
+        # Feature 11: Contains hyphen or underscore
+        has_connector = 1.0 if ('-' in candidate or '_' in candidate) else 0.0
+        features.append(has_connector)
+
+        # Feature 12: Rank in YAKE results
+        try:
+            rank = [kw for kw, _ in all_candidates].index(candidate)
+            rank_norm = 1.0 - (rank / len(all_candidates))
+        except (ValueError, ZeroDivisionError):
+            rank_norm = 0.5
+        features.append(rank_norm)
+
+        return np.array(features, dtype=np.float32)
+
     def extract_from_paper(
         self,
         title: str,
@@ -140,13 +306,19 @@ class KeywordExtractor:
             title: Paper title
             abstract: Paper abstract
             full_text: Full paper text
-            method: 'yake' or 'keybert'
+            method: 'yake', 'keybert', or 'ml' (ML-based ranking)
             top_n: Number of keywords
 
         Returns:
             List of (keyword, score) tuples
         """
-        # Construct text with weighted importance
+        # ML method handles its own text processing
+        if method == "ml":
+            keywords = self.extract_ml(title, abstract, full_text, top_n)
+            # ML already filters, so return directly
+            return keywords
+
+        # Construct text with weighted importance (for YAKE/KeyBERT)
         text_parts = []
 
         if title:
