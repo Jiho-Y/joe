@@ -37,6 +37,43 @@ def test_semantic_scholar():
         print("✗ API FAILED - Semantic Scholar not accessible")
         return False
 
+def test_doi_extraction():
+    """Test improved DOI extraction on sample PDFs."""
+    print("\n" + "="*60)
+    print("TEST: DOI Extraction (Enhanced Algorithm)")
+    print("="*60)
+
+    test_pdfs_dir = Path("test_pdfs")
+    if not test_pdfs_dir.exists():
+        print("⚠ test_pdfs directory not found")
+        return False
+
+    pdf_files = list(test_pdfs_dir.glob("*.pdf"))
+    if not pdf_files:
+        print("⚠ No PDF files found in test_pdfs/")
+        return False
+
+    print(f"Testing DOI extraction on {min(len(pdf_files), 5)} PDFs...\n")
+
+    success_count = 0
+    for i, pdf_file in enumerate(pdf_files[:5]):
+        print(f"[{i+1}] {pdf_file.name}")
+        try:
+            with PDFProcessor(str(pdf_file)) as processor:
+                text = processor.extract_text(max_pages=4)
+                doi = processor._extract_doi(text)
+
+                if doi:
+                    print(f"  → DOI found: {doi}")
+                    success_count += 1
+                else:
+                    print(f"  → No DOI found")
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+
+    print(f"\n✓ DOI extraction success rate: {success_count}/{min(len(pdf_files), 5)}")
+    return success_count > 0
+
 def check_database():
     """Check database contents."""
     print("\n" + "="*60)
@@ -80,9 +117,9 @@ def check_database():
     return True
 
 def test_search():
-    """Test search functionality."""
+    """Test search functionality (title + keywords only)."""
     print("\n" + "="*60)
-    print("TEST: Search Functionality")
+    print("TEST: Search Functionality (Title + Keywords)")
     print("="*60)
 
     db_path = "data/papers.db"
@@ -107,26 +144,62 @@ def test_search():
     else:
         search_word = title_words[0]
 
-    print(f"Searching for: '{search_word}'")
-    print(f"(This word is in paper: {sample_paper['title'][:50]}...)")
+    print(f"Test 1: Search by title word '{search_word}'")
+    print(f"  (Word from paper: {sample_paper['title'][:60]}...)")
 
     results = db.search_papers(search_word, limit=10)
 
+    title_search_success = False
     if results:
-        print(f"✓ Search WORKING - found {len(results)} results")
+        print(f"  ✓ Found {len(results)} results")
         # Check if our sample paper is in results
         found_sample = any(r['id'] == sample_paper['id'] for r in results)
         if found_sample:
-            print(f"✓ Found the expected paper in results")
+            print(f"  ✓ Expected paper found in results")
+            title_search_success = True
         else:
-            print(f"⚠ Sample paper not in results (might be ranking issue)")
-        db.close()
-        return True
+            print(f"  ⚠ Expected paper not in results")
     else:
-        print(f"✗ Search FAILED - no results for '{search_word}'")
-        print("  This indicates FTS5 index is not properly populated")
-        db.close()
-        return False
+        print(f"  ✗ No results for '{search_word}'")
+
+    # Test 2: Search by keyword (if keywords exist)
+    cursor = db.conn.cursor()
+    cursor.execute("""
+        SELECT keyword FROM Keywords
+        WHERE paper_id = ?
+        LIMIT 1
+    """, (sample_paper['id'],))
+
+    keyword_row = cursor.fetchone()
+    keyword_search_success = False
+
+    if keyword_row:
+        test_keyword = keyword_row['keyword']
+        print(f"\nTest 2: Search by keyword '{test_keyword}'")
+
+        results = db.search_papers(test_keyword, limit=10)
+        if results:
+            print(f"  ✓ Found {len(results)} results via keyword search")
+            found_sample = any(r['id'] == sample_paper['id'] for r in results)
+            if found_sample:
+                print(f"  ✓ Expected paper found via keyword")
+                keyword_search_success = True
+            else:
+                print(f"  ⚠ Expected paper not in keyword results")
+        else:
+            print(f"  ⚠ No results for keyword '{test_keyword}'")
+    else:
+        print("\nTest 2: Skipped (no keywords for sample paper)")
+
+    db.close()
+
+    overall_success = title_search_success or keyword_search_success
+    if overall_success:
+        print(f"\n✓ Search functionality WORKING (title + keywords)")
+    else:
+        print(f"\n⚠ Search needs attention (see details above)")
+
+    return overall_success
 
 def re_extract_metadata():
     """Re-extract metadata for all papers using Semantic Scholar."""
@@ -252,13 +325,14 @@ def check_config():
 
 def main():
     print("="*60)
-    print("RESEARCH PAPER MANAGER - DIAGNOSTIC TOOL")
+    print("RESEARCH PAPER MANAGER - DIAGNOSTIC TOOL (v0.2.1)")
     print("="*60)
 
     # Run all tests
     results = {}
     results['config'] = check_config()
     results['semantic_scholar'] = test_semantic_scholar()
+    results['doi_extraction'] = test_doi_extraction()
     results['database'] = check_database()
     results['search'] = test_search()
 

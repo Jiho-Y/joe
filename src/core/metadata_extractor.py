@@ -14,11 +14,14 @@ class KeywordExtractor:
     def __init__(self):
         """Initialize keyword extractors."""
         # YAKE configuration (fast, no model required)
+        # Improved settings for academic papers
         self.yake_extractor = yake.KeywordExtractor(
             lan="en",
-            n=3,  # max n-gram size
-            dedupLim=0.7,  # deduplication threshold
-            top=20,  # top N keywords
+            n=3,  # max n-gram size (1-3 words)
+            dedupLim=0.8,  # higher = less duplication (0.8 recommended for academic)
+            dedupFunc='seqm',  # sequence matching for deduplication
+            windowsSize=1,  # context window
+            top=30,  # extract more, filter later
             features=None
         )
 
@@ -130,7 +133,7 @@ class KeywordExtractor:
         top_n: int = 10
     ) -> List[Tuple[str, float]]:
         """
-        Extract keywords from a paper's text.
+        Extract keywords from a paper's text with improved weighting.
         Prioritizes title and abstract over full text.
 
         Args:
@@ -147,28 +150,35 @@ class KeywordExtractor:
         text_parts = []
 
         if title:
-            # Title is very important, repeat 3 times
-            text_parts.append(title * 3)
+            # Title is extremely important, repeat 5 times
+            # Keywords in title are most representative
+            text_parts.append(title * 5)
 
         if abstract:
-            # Abstract is important, repeat 2 times
-            text_parts.append(abstract * 2)
+            # Abstract is very important, repeat 3 times
+            # Abstract contains key concepts and methodology
+            text_parts.append(abstract * 3)
 
         if full_text:
-            # Use first 5000 characters of full text
-            text_parts.append(full_text[:5000])
+            # Use first 8000 characters of full text (more context)
+            # But lower weight than title/abstract
+            text_parts.append(full_text[:8000])
 
         combined_text = " ".join(text_parts)
 
+        # Extract more keywords initially for better filtering
+        extract_count = max(top_n * 2, 20)
+
         # Extract keywords
         if method == "keybert":
-            keywords = self.extract_keybert(combined_text, top_n)
+            keywords = self.extract_keybert(combined_text, extract_count)
         else:
-            keywords = self.extract_yake(combined_text, top_n)
+            keywords = self.extract_yake(combined_text, extract_count)
 
         # Post-process: remove very generic terms
         filtered = self._filter_generic_keywords(keywords)
 
+        # Return top N after filtering
         return filtered[:top_n]
 
     def _filter_generic_keywords(
@@ -176,7 +186,7 @@ class KeywordExtractor:
         keywords: List[Tuple[str, float]]
     ) -> List[Tuple[str, float]]:
         """
-        Filter out overly generic keywords.
+        Filter out overly generic keywords with improved filtering.
 
         Args:
             keywords: List of (keyword, score) tuples
@@ -184,17 +194,36 @@ class KeywordExtractor:
         Returns:
             Filtered list
         """
-        # Common generic terms in academic papers
+        # Expanded generic terms commonly found in academic papers
         generic_terms = {
-            'paper', 'study', 'research', 'results', 'conclusion',
-            'introduction', 'method', 'approach', 'analysis', 'data',
+            # Meta terms
+            'paper', 'study', 'research', 'article', 'work', 'experiment',
+            'investigation', 'review', 'survey', 'literature',
+            # Structure terms
+            'introduction', 'conclusion', 'results', 'discussion',
+            'method', 'methodology', 'approach', 'analysis', 'evaluation',
+            'background', 'related work', 'future work',
             'figure', 'table', 'section', 'chapter', 'appendix',
-            'et al', 'etc', 'i.e', 'e.g', 'however', 'therefore'
+            # Vague terms
+            'data', 'information', 'system', 'model', 'framework',
+            'problem', 'solution', 'issue', 'case', 'example',
+            # Common words
+            'et al', 'etc', 'i.e', 'e.g', 'via', 'using', 'based',
+            'however', 'therefore', 'moreover', 'furthermore',
+            'also', 'such', 'various', 'different', 'several',
+            'many', 'much', 'more', 'most', 'some', 'other',
+            'new', 'recent', 'current', 'previous', 'important',
+            'significant', 'main', 'key', 'major', 'general',
+            # Time/measurement
+            'year', 'years', 'time', 'times', 'number', 'numbers',
+            'value', 'values', 'level', 'levels', 'rate', 'rates'
         }
 
         filtered = []
+        seen_normalized = set()  # For deduplication
+
         for keyword, score in keywords:
-            keyword_lower = keyword.lower()
+            keyword_lower = keyword.lower().strip()
 
             # Skip if keyword is entirely generic
             if keyword_lower in generic_terms:
@@ -204,10 +233,32 @@ class KeywordExtractor:
             if len(keyword) < 3:
                 continue
 
-            # Skip keywords that are just numbers
-            if keyword.replace('.', '').replace(',', '').isdigit():
+            # Skip keywords that are just numbers or single letters
+            if keyword.replace('.', '').replace(',', '').replace('-', '').isdigit():
                 continue
 
+            # Skip single character keywords
+            if len(keyword_lower.replace(' ', '')) == 1:
+                continue
+
+            # Skip keywords that are mostly non-alphanumeric
+            alpha_ratio = sum(c.isalnum() for c in keyword) / len(keyword)
+            if alpha_ratio < 0.5:
+                continue
+
+            # Normalize for deduplication (lowercase, remove plurals)
+            normalized = keyword_lower.rstrip('s')
+
+            # Skip if we've seen this (or very similar) keyword
+            if normalized in seen_normalized:
+                continue
+
+            # Skip keywords with too many words (likely noise)
+            if len(keyword.split()) > 4:
+                continue
+
+            # Accept this keyword
+            seen_normalized.add(normalized)
             filtered.append((keyword, score))
 
         return filtered

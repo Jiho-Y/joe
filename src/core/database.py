@@ -204,7 +204,12 @@ class Database:
 
     def search_papers(self, query: str, limit: int = 100) -> List[Dict]:
         """
-        Full-text search across papers - completely rewritten for accuracy.
+        Search papers by TITLE and KEYWORDS only (improved accuracy).
+
+        Strategy:
+        1. Search in paper titles (FTS5)
+        2. Search in keywords (Keywords table)
+        3. Merge and rank results
 
         Args:
             query: Search query (e.g., "heat treatment", "fatigue crack")
@@ -222,10 +227,13 @@ class Database:
         # Clean query
         query = query.strip()
 
-        # Strategy: Use simple MATCH with proper escaping
-        # FTS5 will handle relevance ranking automatically
+        # Dictionary to collect papers and their relevance scores
+        paper_scores = {}  # {paper_id: score}
+
+        # STRATEGY 1: Search in TITLE using FTS5
         try:
-            # Simple FTS5 match - let SQLite handle the ranking
+            # Search only in the title field using FTS5 column syntax
+            title_query = f"title:{query}"
             cursor.execute("""
                 SELECT DISTINCT
                     Papers.id,
@@ -248,56 +256,91 @@ class Database:
                 WHERE FullTextIndex MATCH ?
                 ORDER BY rank
                 LIMIT ?
-            """, (query, limit))
+            """, (title_query, limit * 2))  # Get more for merging
 
-            papers = []
             for row in cursor.fetchall():
-                paper = dict(row)
-                if paper['authors']:
-                    try:
-                        paper['authors'] = json.loads(paper['authors'])
-                    except:
-                        paper['authors'] = []
-                papers.append(paper)
-
-            if papers:
-                print(f"✓ Found {len(papers)} results for: {query}")
-                return papers
+                paper_id = row['id']
+                rank = row['rank']
+                # BM25 returns negative scores, lower is better
+                # Convert to positive score (higher is better)
+                score = -rank
+                paper_scores[paper_id] = max(paper_scores.get(paper_id, 0), score * 2)  # Title match = 2x weight
 
         except Exception as e:
-            print(f"FTS5 search error: {e}")
+            print(f"Title FTS5 search error: {e}")
 
-        # Fallback: Simple LIKE search if FTS5 fails
-        print(f"⚠ Using fallback LIKE search for: {query}")
+        # STRATEGY 2: Search in KEYWORDS
         try:
             search_pattern = f"%{query}%"
             cursor.execute("""
-                SELECT * FROM Papers
-                WHERE title LIKE ? OR abstract LIKE ?
-                ORDER BY
-                    CASE
-                        WHEN title LIKE ? THEN 1
-                        WHEN abstract LIKE ? THEN 2
-                        ELSE 3
-                    END
-                LIMIT ?
-            """, (search_pattern, search_pattern, search_pattern, search_pattern, limit))
+                SELECT DISTINCT paper_id, keyword, score
+                FROM Keywords
+                WHERE keyword LIKE ?
+                ORDER BY score DESC
+            """, (search_pattern,))
 
-            papers = []
             for row in cursor.fetchall():
-                paper = dict(row)
-                if paper['authors']:
-                    try:
-                        paper['authors'] = json.loads(paper['authors'])
-                    except:
-                        paper['authors'] = []
-                papers.append(paper)
-
-            return papers
+                paper_id = row['paper_id']
+                keyword_score = row['score'] or 0.5
+                # Add keyword match score
+                paper_scores[paper_id] = paper_scores.get(paper_id, 0) + keyword_score
 
         except Exception as e:
-            print(f"Fallback search error: {e}")
+            print(f"Keyword search error: {e}")
+
+        # If no results from FTS5 or keywords, try simple title LIKE search
+        if not paper_scores:
+            print(f"⚠ Using fallback LIKE search for: {query}")
+            try:
+                search_pattern = f"%{query}%"
+                cursor.execute("""
+                    SELECT id FROM Papers
+                    WHERE title LIKE ?
+                    LIMIT ?
+                """, (search_pattern, limit))
+
+                for row in cursor.fetchall():
+                    paper_id = row['id']
+                    paper_scores[paper_id] = 1.0  # Default score
+
+            except Exception as e:
+                print(f"Fallback search error: {e}")
+
+        # Sort papers by score (highest first)
+        sorted_paper_ids = sorted(
+            paper_scores.keys(),
+            key=lambda pid: paper_scores[pid],
+            reverse=True
+        )[:limit]
+
+        # Fetch full paper details for top results
+        if not sorted_paper_ids:
+            print(f"✗ No results found for: {query}")
             return []
+
+        # Build query with placeholders
+        placeholders = ','.join('?' * len(sorted_paper_ids))
+        cursor.execute(f"""
+            SELECT * FROM Papers
+            WHERE id IN ({placeholders})
+        """, sorted_paper_ids)
+
+        # Create a map of papers by ID
+        papers_map = {}
+        for row in cursor.fetchall():
+            paper = dict(row)
+            if paper['authors']:
+                try:
+                    paper['authors'] = json.loads(paper['authors'])
+                except:
+                    paper['authors'] = []
+            papers_map[paper['id']] = paper
+
+        # Return papers in order of relevance
+        papers = [papers_map[pid] for pid in sorted_paper_ids if pid in papers_map]
+
+        print(f"✓ Found {len(papers)} results for '{query}' (title + keywords only)")
+        return papers
 
     def add_keywords(
         self,

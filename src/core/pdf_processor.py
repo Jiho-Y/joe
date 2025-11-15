@@ -76,7 +76,9 @@ class PDFProcessor:
 
         # Extract first page text for title/author inference
         first_page_text = self.doc[0].get_text("text") if self.num_pages > 0 else ""
-        first_two_pages = self.extract_text(max_pages=2)
+
+        # Extract first 4 pages for DOI extraction (DOI can be on later pages)
+        first_four_pages = self.extract_text(max_pages=4)
 
         # Get file information
         file_size = self.pdf_path.stat().st_size
@@ -92,8 +94,8 @@ class PDFProcessor:
             'modification_date': pdf_metadata.get('modDate', ''),
         }
 
-        # STEP 1: Try to extract DOI
-        doi = self._extract_doi(first_two_pages)
+        # STEP 1: Try to extract DOI (search in first 4 pages)
+        doi = self._extract_doi(first_four_pages)
         metadata['doi'] = doi
 
         # STEP 2: If DOI found and Semantic Scholar enabled, fetch metadata
@@ -173,39 +175,73 @@ class PDFProcessor:
 
     def _extract_doi(self, text: str) -> Optional[str]:
         """
-        Extract DOI from text using regex patterns.
+        Extract DOI from text using enhanced regex patterns.
 
         DOI format: 10.xxxx/yyyyy (where xxxx is 4+ digits)
+        Supports various formats and special characters commonly found in PDFs.
 
         Args:
-            text: Text to search for DOI
+            text: Text to search for DOI (searches first 5000 chars)
 
         Returns:
             DOI string or None
         """
+        # Expand search range to first 5000 characters for better coverage
+        search_text = text[:5000]
+
         # DOI patterns (in order of specificity)
+        # Based on official DOI format: https://www.doi.org/doi_handbook/2_Numbering.html
         patterns = [
-            # Pattern 1: DOI with label
-            r'DOI[\s:]+(?:https?://(?:dx\.)?doi\.org/)?(\b10\.\d{4,}/[^\s]+)',
+            # Pattern 1: DOI with explicit label (most reliable)
+            r'DOI[\s:]*(?:https?://(?:dx\.)?doi\.org/)?(\b10\.\d{4,9}/[^\s\)\]]+)',
 
-            # Pattern 2: DOI URL
-            r'(?:https?://)?(?:dx\.)?doi\.org/(\b10\.\d{4,}/[^\s]+)',
+            # Pattern 2: "doi:" or "doi :" prefix
+            r'doi[\s:]+(\b10\.\d{4,9}/[^\s\)\]]+)',
 
-            # Pattern 3: DOI without label (in first 2000 chars only)
-            r'\b(10\.\d{4,}/[^\s<>]+)',
+            # Pattern 3: DOI URL with various formats
+            r'(?:https?://)?(?:dx\.)?doi\.org/(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 4: "Digital Object Identifier" label
+            r'Digital\s+Object\s+Identifier[\s:]+(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 5: DOI in parentheses or brackets
+            r'[\(\[](?:DOI|doi)[\s:]*(\b10\.\d{4,9}/[^\s\)\]]+)[\)\]]',
+
+            # Pattern 6: Standalone DOI (broader search, less specific)
+            r'\b(10\.\d{4,9}/[^\s<>\)\]]{6,})',
+
+            # Pattern 7: DOI with line breaks (common in PDFs)
+            r'DOI[\s:]*\n?\s*(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 8: CrossRef or other resolver URLs
+            r'(?:https?://)?(?:www\.)?crossref\.org/.*?(\b10\.\d{4,9}/[^\s\)\]&]+)',
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, text[:2000], re.IGNORECASE)
-            if match:
+            matches = re.finditer(pattern, search_text, re.IGNORECASE | re.MULTILINE)
+            for match in matches:
                 doi = match.group(1).strip()
 
-                # Clean up common trailing chars
-                doi = doi.rstrip('.,;:)]')
+                # Clean up common trailing characters
+                doi = doi.rstrip('.,;:)]}\'"')
 
-                # Validate DOI format (basic check)
-                if re.match(r'^10\.\d{4,}/\S+', doi):
-                    return doi
+                # Remove common PDF artifacts
+                doi = re.sub(r'[\n\r\t]+', '', doi)  # Remove line breaks
+                doi = re.sub(r'\s+', '', doi)  # Remove spaces
+
+                # Remove HTML entities if present
+                doi = doi.replace('&lt;', '').replace('&gt;', '')
+
+                # Validate DOI format
+                # Must start with 10.xxxx/ where xxxx is 4-9 digits
+                # Suffix can contain alphanumeric, dots, hyphens, underscores, parentheses
+                if re.match(r'^10\.\d{4,9}/[a-zA-Z0-9\.\-_\(\)/]+$', doi):
+                    # Additional validation: DOI should be reasonable length
+                    if 10 <= len(doi) <= 200:
+                        print(f"  ✓ Found DOI: {doi}")
+                        return doi
+                    else:
+                        print(f"  ⚠ DOI length invalid ({len(doi)} chars): {doi}")
 
         return None
 
