@@ -24,6 +24,7 @@ bibtexparser==2.0.0b7
 # Network/Graph Analysis
 networkx==3.2.1
 python-louvain==0.16
+matplotlib==3.8.2
 
 # arXiv Downloader
 arxiv==2.1.0
