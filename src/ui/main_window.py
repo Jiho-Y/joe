@@ -257,6 +257,13 @@ class MainWindow(QMainWindow):
         import_action.triggered.connect(self.import_pdfs)
         file_menu.addAction(import_action)
 
+        import_folder_action = QAction("Import Folder...", self)
+        import_folder_action.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        import_folder_action.triggered.connect(self.import_from_folder)
+        file_menu.addAction(import_folder_action)
+
+        file_menu.addSeparator()
+
         export_bibtex_action = QAction("Export to BibTeX...", self)
         export_bibtex_action.setShortcut(QKeySequence("Ctrl+E"))
         export_bibtex_action.triggered.connect(self.export_bibtex)
@@ -340,26 +347,39 @@ class MainWindow(QMainWindow):
     def create_toolbar(self) -> QHBoxLayout:
         """Create toolbar with logically grouped action buttons."""
         layout = QHBoxLayout()
+        layout.setSpacing(5)  # Reduce spacing between groups
+        layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
 
         # File Operations Group
         file_group = QGroupBox("File Operations")
+        file_group.setStyleSheet("QGroupBox { padding-top: 10px; margin-top: 0px; font-weight: bold; }")
         file_layout = QHBoxLayout()
+        file_layout.setContentsMargins(5, 5, 5, 5)  # Reduce internal margins
+        file_layout.setSpacing(3)  # Reduce spacing between buttons
 
         add_btn = QPushButton("➕ Import PDFs")
         add_btn.setToolTip("Import PDF files into library (Ctrl+I)")
         add_btn.clicked.connect(self.import_pdfs)
+
+        folder_btn = QPushButton("📁 Import Folder")
+        folder_btn.setToolTip("Import all PDFs from a folder and its subfolders (Ctrl+Shift+I)")
+        folder_btn.clicked.connect(self.import_from_folder)
 
         export_btn = QPushButton("📤 Export BibTeX")
         export_btn.setToolTip("Export selected papers to BibTeX format (Ctrl+E)")
         export_btn.clicked.connect(self.export_bibtex)
 
         file_layout.addWidget(add_btn)
+        file_layout.addWidget(folder_btn)
         file_layout.addWidget(export_btn)
         file_group.setLayout(file_layout)
 
         # Paper Management Group
         paper_group = QGroupBox("Paper Management")
+        paper_group.setStyleSheet("QGroupBox { padding-top: 10px; margin-top: 0px; font-weight: bold; }")
         paper_layout = QHBoxLayout()
+        paper_layout.setContentsMargins(5, 5, 5, 5)
+        paper_layout.setSpacing(3)
 
         open_btn = QPushButton("🔍 Open PDF")
         open_btn.setToolTip("Open selected PDF in Preview (Double-click or press Space)")
@@ -375,7 +395,10 @@ class MainWindow(QMainWindow):
 
         # View Group
         view_group = QGroupBox("View")
+        view_group.setStyleSheet("QGroupBox { padding-top: 10px; margin-top: 0px; font-weight: bold; }")
         view_layout = QHBoxLayout()
+        view_layout.setContentsMargins(5, 5, 5, 5)
+        view_layout.setSpacing(3)
 
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setToolTip("Reload papers from database")
@@ -412,6 +435,64 @@ class MainWindow(QMainWindow):
 
         # Show progress dialog
         progress = QProgressDialog("Importing PDFs...", "Cancel", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+
+        # Create import thread (pass db_path, not db object for thread safety)
+        self.import_thread = PDFImportThread(pdf_paths, self.db_path)
+        self.import_thread.progress.connect(
+            lambda pct, msg: (progress.setValue(pct), progress.setLabelText(msg))
+        )
+        self.import_thread.finished.connect(
+            lambda ids: self.on_import_finished(ids, progress)
+        )
+        self.import_thread.error.connect(
+            lambda msg: QMessageBox.warning(self, "Import Error", msg)
+        )
+
+        self.import_thread.start()
+
+    def import_from_folder(self):
+        """Import all PDF files from a folder and its subfolders."""
+        file_dialog = QFileDialog()
+        folder_path = file_dialog.getExistingDirectory(
+            self,
+            "Select folder containing PDFs",
+            "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+
+        if not folder_path:
+            return
+
+        # Find all PDF files recursively
+        folder = Path(folder_path)
+        pdf_paths = [str(p) for p in folder.rglob('*.pdf')]
+
+        if not pdf_paths:
+            QMessageBox.information(
+                self,
+                "No PDFs Found",
+                f"No PDF files found in:\n{folder_path}\n\n"
+                f"The folder and its subfolders were searched."
+            )
+            return
+
+        # Confirm import
+        reply = QMessageBox.question(
+            self,
+            "Confirm Import",
+            f"Found {len(pdf_paths)} PDF file(s) in folder and subfolders.\n\n"
+            f"Do you want to import all of them?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Show progress dialog
+        progress = QProgressDialog("Importing PDFs from folder...", "Cancel", 0, 100, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
