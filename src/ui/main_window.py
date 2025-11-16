@@ -350,12 +350,24 @@ class MainWindow(QMainWindow):
         layout.setSpacing(5)  # Reduce spacing between groups
         layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
 
+        # Compact QGroupBox style
+        compact_style = """
+            QGroupBox {
+                font-size: 10px;
+                font-weight: bold;
+                padding-top: 12px;
+                padding-bottom: 2px;
+                margin-top: 0px;
+                margin-bottom: 0px;
+            }
+        """
+
         # File Operations Group
         file_group = QGroupBox("File Operations")
-        file_group.setStyleSheet("QGroupBox { padding-top: 10px; margin-top: 0px; font-weight: bold; }")
+        file_group.setStyleSheet(compact_style)
         file_layout = QHBoxLayout()
-        file_layout.setContentsMargins(5, 5, 5, 5)  # Reduce internal margins
-        file_layout.setSpacing(3)  # Reduce spacing between buttons
+        file_layout.setContentsMargins(3, 0, 3, 3)  # Minimal margins
+        file_layout.setSpacing(3)
 
         add_btn = QPushButton("➕ Import PDFs")
         add_btn.setToolTip("Import PDF files into library (Ctrl+I)")
@@ -376,9 +388,9 @@ class MainWindow(QMainWindow):
 
         # Paper Management Group
         paper_group = QGroupBox("Paper Management")
-        paper_group.setStyleSheet("QGroupBox { padding-top: 10px; margin-top: 0px; font-weight: bold; }")
+        paper_group.setStyleSheet(compact_style)
         paper_layout = QHBoxLayout()
-        paper_layout.setContentsMargins(5, 5, 5, 5)
+        paper_layout.setContentsMargins(3, 0, 3, 3)
         paper_layout.setSpacing(3)
 
         open_btn = QPushButton("🔍 Open PDF")
@@ -395,9 +407,9 @@ class MainWindow(QMainWindow):
 
         # View Group
         view_group = QGroupBox("View")
-        view_group.setStyleSheet("QGroupBox { padding-top: 10px; margin-top: 0px; font-weight: bold; }")
+        view_group.setStyleSheet(compact_style)
         view_layout = QHBoxLayout()
-        view_layout.setContentsMargins(5, 5, 5, 5)
+        view_layout.setContentsMargins(3, 0, 3, 3)
         view_layout.setSpacing(3)
 
         refresh_btn = QPushButton("🔄 Refresh")
