@@ -1,0 +1,718 @@
+"""
+PDF processing module using PyMuPDF (fitz).
+Handles text extraction, metadata parsing, and page-level operations.
+"""
+
+import fitz  # PyMuPDF
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import re
+
+
+class PDFProcessor:
+    """Process PDF files to extract text and metadata."""
+
+    def __init__(self, pdf_path: str):
+        """
+        Initialize PDF processor.
+
+        Args:
+            pdf_path: Path to PDF file
+        """
+        self.pdf_path = Path(pdf_path)
+        if not self.pdf_path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+        self.doc = fitz.open(str(self.pdf_path))
+        self.num_pages = len(self.doc)
+
+    def extract_text(self, max_pages: Optional[int] = None) -> str:
+        """
+        Extract all text from PDF.
+
+        Args:
+            max_pages: Maximum number of pages to process (None = all)
+
+        Returns:
+            Extracted text as a single string
+        """
+        pages_to_process = min(max_pages or self.num_pages, self.num_pages)
+        text_parts = []
+
+        for page_num in range(pages_to_process):
+            page = self.doc[page_num]
+            text = page.get_text("text")
+            text_parts.append(text)
+
+        return "\n\n".join(text_parts)
+
+    def extract_text_by_page(self) -> List[str]:
+        """
+        Extract text page by page.
+
+        Returns:
+            List of text strings, one per page
+        """
+        return [page.get_text("text") for page in self.doc]
+
+    def extract_metadata(self, use_semantic_scholar: bool = True) -> Dict[str, any]:
+        """
+        Extract PDF metadata with Semantic Scholar API (if available).
+
+        Strategy:
+        1. Extract DOI from PDF
+        2. If DOI found → fetch from Semantic Scholar (95% accuracy)
+        3. If no DOI → try title search on Semantic Scholar
+        4. Fallback → heuristic extraction from PDF
+
+        Args:
+            use_semantic_scholar: Use Semantic Scholar API (default True)
+
+        Returns:
+            Dictionary with metadata fields
+        """
+        # Get embedded PDF metadata
+        pdf_metadata = self.doc.metadata
+
+        # Extract first page text for title/author inference
+        first_page_text = self.doc[0].get_text("text") if self.num_pages > 0 else ""
+
+        # Extract first 4 pages for DOI extraction (DOI can be on later pages)
+        first_four_pages = self.extract_text(max_pages=4)
+
+        # Get file information
+        file_size = self.pdf_path.stat().st_size
+
+        metadata = {
+            'pdf_path': str(self.pdf_path),
+            'num_pages': self.num_pages,
+            'file_size': file_size,
+            'embedded_title': pdf_metadata.get('title', ''),
+            'embedded_author': pdf_metadata.get('author', ''),
+            'embedded_subject': pdf_metadata.get('subject', ''),
+            'creation_date': pdf_metadata.get('creationDate', ''),
+            'modification_date': pdf_metadata.get('modDate', ''),
+        }
+
+        # STEP 1: Try to extract DOI (search in first 4 pages)
+        doi = self._extract_doi(first_four_pages)
+        metadata['doi'] = doi
+
+        # STEP 2: If DOI found and Semantic Scholar enabled, fetch metadata
+        if doi and use_semantic_scholar:
+            try:
+                from src.utils.semantic_scholar import get_metadata_by_doi
+                ss_metadata = get_metadata_by_doi(doi)
+
+                if ss_metadata:
+                    print(f"✓ Semantic Scholar: Found metadata for DOI {doi}")
+                    # Merge Semantic Scholar data (prioritize over heuristics)
+                    metadata.update({
+                        'title': ss_metadata.get('title') or metadata.get('title'),
+                        'authors': ss_metadata.get('authors') or [],
+                        'year': ss_metadata.get('year'),
+                        'abstract': ss_metadata.get('abstract'),
+                        'journal': ss_metadata.get('journal'),
+                        'arxiv_id': ss_metadata.get('arxiv_id'),
+                        'source': 'semantic_scholar',
+                    })
+                    return metadata
+
+            except Exception as e:
+                print(f"Semantic Scholar API error: {e}")
+
+        # STEP 3: No DOI or API failed, try title-based search
+        if use_semantic_scholar:
+            # Infer title first
+            inferred_title = self._infer_title_from_text(first_page_text)
+            if inferred_title and len(inferred_title) > 15:
+                try:
+                    from src.utils.semantic_scholar import get_metadata_by_title
+                    ss_metadata = get_metadata_by_title(inferred_title)
+
+                    if ss_metadata:
+                        print(f"✓ Semantic Scholar: Found via title search")
+                        metadata.update({
+                            'title': ss_metadata.get('title') or inferred_title,
+                            'authors': ss_metadata.get('authors') or [],
+                            'year': ss_metadata.get('year'),
+                            'abstract': ss_metadata.get('abstract'),
+                            'journal': ss_metadata.get('journal'),
+                            'doi': ss_metadata.get('doi') or doi,
+                            'arxiv_id': ss_metadata.get('arxiv_id'),
+                            'source': 'semantic_scholar',
+                        })
+                        return metadata
+
+                except Exception as e:
+                    print(f"Semantic Scholar title search error: {e}")
+
+        # STEP 4: Fallback to heuristic extraction
+        print("⚠ Using heuristic extraction (Semantic Scholar unavailable)")
+
+        # Try to infer title from first page
+        inferred_title = self._infer_title_from_text(first_page_text)
+        if inferred_title and not metadata['embedded_title']:
+            metadata['title'] = inferred_title
+        else:
+            metadata['title'] = metadata['embedded_title'] or self.pdf_path.stem
+
+        # Try to infer authors
+        inferred_authors = self._infer_authors_from_text(first_page_text)
+        metadata['authors'] = inferred_authors
+
+        # Try to extract abstract
+        abstract = self._extract_abstract(self.extract_text(max_pages=3))
+        metadata['abstract'] = abstract
+
+        # Try to infer year
+        year = self._infer_year_from_text(first_page_text)
+        metadata['year'] = year
+
+        metadata['source'] = 'heuristic'
+
+        return metadata
+
+    def _extract_doi(self, text: str) -> Optional[str]:
+        """
+        Extract DOI from text using enhanced regex patterns.
+
+        DOI format: 10.xxxx/yyyyy (where xxxx is 4+ digits)
+        Supports various formats and special characters commonly found in PDFs.
+
+        Args:
+            text: Text to search for DOI (searches first 5000 chars)
+
+        Returns:
+            DOI string or None
+        """
+        # Expand search range to first 5000 characters for better coverage
+        search_text = text[:5000]
+
+        # DOI patterns (in order of specificity)
+        # Based on official DOI format: https://www.doi.org/doi_handbook/2_Numbering.html
+        patterns = [
+            # Pattern 1: DOI with explicit label (most reliable)
+            r'DOI[\s:]*(?:https?://(?:dx\.)?doi\.org/)?(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 2: "doi:" or "doi :" prefix
+            r'doi[\s:]+(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 3: DOI URL with various formats
+            r'(?:https?://)?(?:dx\.)?doi\.org/(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 4: "Digital Object Identifier" label
+            r'Digital\s+Object\s+Identifier[\s:]+(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 5: DOI in parentheses or brackets
+            r'[\(\[](?:DOI|doi)[\s:]*(\b10\.\d{4,9}/[^\s\)\]]+)[\)\]]',
+
+            # Pattern 6: Standalone DOI (broader search, less specific)
+            r'\b(10\.\d{4,9}/[^\s<>\)\]]{6,})',
+
+            # Pattern 7: DOI with line breaks (common in PDFs)
+            r'DOI[\s:]*\n?\s*(\b10\.\d{4,9}/[^\s\)\]]+)',
+
+            # Pattern 8: CrossRef or other resolver URLs
+            r'(?:https?://)?(?:www\.)?crossref\.org/.*?(\b10\.\d{4,9}/[^\s\)\]&]+)',
+        ]
+
+        for pattern in patterns:
+            matches = re.finditer(pattern, search_text, re.IGNORECASE | re.MULTILINE)
+            for match in matches:
+                doi = match.group(1).strip()
+
+                # Clean up common trailing characters
+                doi = doi.rstrip('.,;:)]}\'"')
+
+                # Remove common PDF artifacts
+                doi = re.sub(r'[\n\r\t]+', '', doi)  # Remove line breaks
+                doi = re.sub(r'\s+', '', doi)  # Remove spaces
+
+                # Remove HTML entities if present
+                doi = doi.replace('&lt;', '').replace('&gt;', '')
+
+                # Validate DOI format
+                # Must start with 10.xxxx/ where xxxx is 4-9 digits
+                # Suffix can contain alphanumeric, dots, hyphens, underscores, parentheses
+                if re.match(r'^10\.\d{4,9}/[a-zA-Z0-9\.\-_\(\)/]+$', doi):
+                    # Additional validation: DOI should be reasonable length
+                    if 10 <= len(doi) <= 200:
+                        print(f"  ✓ Found DOI: {doi}")
+                        return doi
+                    else:
+                        print(f"  ⚠ DOI length invalid ({len(doi)} chars): {doi}")
+
+        return None
+
+    def _infer_title_from_text(self, text: str) -> Optional[str]:
+        """
+        Infer paper title from first page text.
+        Usually the title is in the first few lines, often capitalized.
+
+        Args:
+            text: First page text
+
+        Returns:
+            Inferred title or None
+        """
+        lines = text.split('\n')
+        candidates = []
+
+        for i, line in enumerate(lines[:20]):  # Check first 20 lines
+            line = line.strip()
+
+            # Skip very short lines or lines with weird characters
+            if len(line) < 10 or len(line) > 200:
+                continue
+
+            # Skip lines that look like headers/footers
+            if re.search(r'^\d+$|^page \d+|copyright|proceedings', line, re.I):
+                continue
+
+            # Title is often in title case or all caps
+            if line[0].isupper() and len(line.split()) > 3:
+                candidates.append(line)
+
+        # Return the longest candidate (likely the full title)
+        if candidates:
+            return max(candidates, key=len)
+
+        return None
+
+    def _infer_authors_from_text(self, text: str) -> List[str]:
+        """
+        Infer author names from first page text with improved patterns.
+
+        Args:
+            text: First page text
+
+        Returns:
+            List of inferred author names
+        """
+        authors = []
+
+        # Look for explicit author section first
+        author_section_patterns = [
+            r'(?:Authors?|By)\s*[:\-]?\s*\n\s*(.+?)(?:\n\n|Abstract|ABSTRACT)',
+            r'(?:Authors?|By)\s*[:\-]\s*(.+?)(?:\n\n|$)',
+        ]
+
+        for pattern in author_section_patterns:
+            match = re.search(pattern, text[:2000], re.DOTALL | re.IGNORECASE)
+            if match:
+                author_text = match.group(1)
+                # Extract names from this section
+                names = self._extract_names_from_text(author_text)
+                if names:
+                    return names[:15]  # Max 15 authors
+
+        # Fallback: look for names after title (usually 2nd-5th line)
+        lines = text.split('\n')
+        for i, line in enumerate(lines[1:10]):  # Skip first line (usually title)
+            line = line.strip()
+
+            # Skip short lines, URLs, dates, etc.
+            if len(line) < 5 or '@' in line or 'http' in line:
+                continue
+
+            # Look for name patterns in this line
+            names = self._extract_names_from_text(line)
+            if names:
+                authors.extend(names)
+
+        # Deduplicate and return
+        unique_authors = []
+        seen = set()
+        for author in authors:
+            if author.lower() not in seen:
+                seen.add(author.lower())
+                unique_authors.append(author)
+
+        return unique_authors[:15]  # Max 15 authors
+
+    def _extract_names_from_text(self, text: str) -> List[str]:
+        """
+        Extract person names from text using multiple patterns.
+
+        Args:
+            text: Text containing potential names
+
+        Returns:
+            List of extracted names
+        """
+        names = []
+
+        # Pattern 1: First Middle Last (e.g., John A. Smith)
+        pattern1 = r'\b[A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+\b'
+
+        # Pattern 2: First Last (e.g., John Smith)
+        pattern2 = r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b'
+
+        # Pattern 3: Last, First (e.g., Smith, John)
+        pattern3 = r'\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b'
+
+        # Pattern 4: Initials + Last (e.g., J.A. Smith)
+        pattern4 = r'\b[A-Z]\.[A-Z]\.\s+[A-Z][a-z]+\b'
+
+        all_patterns = [pattern1, pattern2, pattern3, pattern4]
+
+        for pattern in all_patterns:
+            matches = re.findall(pattern, text)
+            names.extend(matches)
+
+        # Filter out false positives
+        stopwords = {
+            'The', 'This', 'That', 'These', 'Those', 'They', 'There',
+            'University', 'Institute', 'Department', 'College', 'School',
+            'Science', 'Engineering', 'Technology', 'Research', 'Center',
+            'Journal', 'Conference', 'Proceedings', 'International', 'National',
+            'American', 'European', 'Asian', 'Society', 'Association',
+            'All Rights', 'Copyright', 'Permission', 'Published'
+        }
+
+        filtered_names = []
+        for name in names:
+            # Clean up
+            name = name.strip(',. ')
+
+            # Skip if first word is a stopword
+            first_word = name.split()[0]
+            if first_word in stopwords:
+                continue
+
+            # Skip if contains numbers
+            if any(char.isdigit() for char in name):
+                continue
+
+            # Skip if too short
+            if len(name) < 5:
+                continue
+
+            filtered_names.append(name)
+
+        return filtered_names
+
+    def _extract_abstract(self, text: str) -> Optional[str]:
+        """
+        Extract abstract from paper text with improved pattern matching.
+
+        Args:
+            text: First few pages of text
+
+        Returns:
+            Abstract text or None
+        """
+        # Multiple patterns to catch different abstract formats
+        patterns = [
+            # Pattern 1: Abstract followed by content until double newline or section
+            r'(?:abstract|ABSTRACT|Abstract)\s*[:\-—]?\s*\n\s*(.+?)(?:\n\n\s*(?:[A-Z]|Keywords|Introduction|1\.|I\.))',
+
+            # Pattern 2: Abstract in same line
+            r'(?:abstract|ABSTRACT|Abstract)\s*[:\-—]\s*(.+?)(?:\n\n|Keywords|Introduction)',
+
+            # Pattern 3: Abstract with Keywords marker
+            r'(?:abstract|ABSTRACT|Abstract)\s*[:\-—]?\s*\n\s*(.+?)(?:Keywords|KEYWORDS|Key words)',
+
+            # Pattern 4: Very flexible - abstract until Introduction or section 1
+            r'(?:abstract|ABSTRACT|Abstract)[\s\S]{0,50}?(.+?)(?:Introduction|INTRODUCTION|1\s+Introduction|I\s+INTRODUCTION|\n1\.)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                abstract = match.group(1).strip()
+
+                # Clean up
+                abstract = re.sub(r'\s+', ' ', abstract)  # Multiple spaces to single
+                abstract = re.sub(r'\n', ' ', abstract)   # Newlines to spaces
+
+                # Remove common artifacts
+                abstract = re.sub(r'^\d+\s*', '', abstract)  # Leading numbers
+                abstract = abstract.strip('.,;:')
+
+                # Validate: should be at least 50 chars and not too long
+                if 50 <= len(abstract) <= 3000:
+                    return abstract[:2000]  # Limit but allow longer abstracts
+
+        return None
+
+    def _infer_year_from_text(self, text: str) -> Optional[int]:
+        """
+        Infer publication year from text with improved pattern matching.
+
+        Args:
+            text: First page text
+
+        Returns:
+            Year as integer or None
+        """
+        # Priority 1: Look for copyright/published year
+        copyright_patterns = [
+            r'[©Cc]opyright\s+(?:©\s*)?(\d{4})',
+            r'[Pp]ublished\s+(?:in\s+)?(\d{4})',
+            r'[Pp]ublication\s+[Yy]ear[:\s]+(\d{4})',
+            r'[Pp]ublished:\s+\w+\s+\d+,?\s+(\d{4})',
+        ]
+
+        for pattern in copyright_patterns:
+            match = re.search(pattern, text[:3000])
+            if match:
+                year = int(match.group(1))
+                if 1950 <= year <= 2030:  # Reasonable range
+                    return year
+
+        # Priority 2: Look for date patterns (Month Day, Year or Day Month Year)
+        date_patterns = [
+            r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(\d{4})\b',
+            r'\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b',
+        ]
+
+        for pattern in date_patterns:
+            match = re.search(pattern, text[:3000], re.IGNORECASE)
+            if match:
+                year = int(match.group(1))
+                if 1950 <= year <= 2030:
+                    return year
+
+        # Priority 3: Look for any 4-digit year in reasonable range
+        year_pattern = r'\b(19\d{2}|20[0-2]\d)\b'
+        matches = re.findall(year_pattern, text[:2000])
+
+        if matches:
+            # Filter to reasonable range and return most recent
+            years = [int(y) for y in matches if 1950 <= int(y) <= 2030]
+            if years:
+                return max(years)
+
+        return None
+
+    def extract_references(self) -> List[Dict[str, any]]:
+        """
+        Extract and parse references section from PDF with enhanced detection.
+
+        Returns structured reference data including DOI, arXiv ID, title, authors, year.
+
+        Returns:
+            List of dictionaries with structured reference data
+        """
+        # Get text from last 40% of document (references usually at end)
+        start_page = max(0, int(self.num_pages * 0.6))
+        end_text = ""
+
+        for page_num in range(start_page, self.num_pages):
+            end_text += self.doc[page_num].get_text("text") + "\n"
+
+        # Find "References" section with multiple patterns
+        ref_patterns = [
+            r'(?:^|\n)(?:References|REFERENCES)\s*\n(.+)',
+            r'(?:^|\n)(?:Bibliography|BIBLIOGRAPHY)\s*\n(.+)',
+            r'(?:^|\n)(?:References and Notes|REFERENCES AND NOTES)\s*\n(.+)',
+            r'(?:^|\n)(?:Works Cited|WORKS CITED)\s*\n(.+)',
+            r'(?:^|\n)(?:Literature Cited|LITERATURE CITED)\s*\n(.+)',
+        ]
+
+        ref_text = None
+        for pattern in ref_patterns:
+            match = re.search(pattern, end_text, re.DOTALL | re.IGNORECASE)
+            if match:
+                ref_text = match.group(1)
+                break
+
+        if not ref_text:
+            return []
+
+        # Split by common reference numbering patterns
+        # Pattern 1: [1], [2], etc.
+        # Pattern 2: 1., 2., etc.
+        # Pattern 3: (1), (2), etc.
+        # Pattern 4: 1  (with double space)
+        split_patterns = [
+            r'\n\s*\[\d+\]\s*',
+            r'\n\s*\d+\.\s+',
+            r'\n\s*\(\d+\)\s*',
+            r'\n\s*\d+\s\s+',
+        ]
+
+        raw_references = []
+        for pattern in split_patterns:
+            raw_references = re.split(pattern, ref_text)
+            if len(raw_references) > 3:  # Found good splits
+                break
+
+        # If no good splits, try line-based approach
+        if len(raw_references) <= 3:
+            raw_references = ref_text.split('\n')
+
+        # Parse each reference
+        parsed_references = []
+        for raw_ref in raw_references:
+            raw_ref = raw_ref.strip()
+
+            # Skip if too short or too long
+            if len(raw_ref) < 30 or len(raw_ref) > 2000:
+                continue
+
+            # Clean up multi-line references
+            raw_ref = re.sub(r'\s+', ' ', raw_ref)
+
+            # Parse structured data from this reference
+            parsed = self._parse_reference(raw_ref)
+            if parsed:
+                parsed_references.append(parsed)
+
+        return parsed_references[:200]  # Limit to 200 references
+
+    def _parse_reference(self, ref_text: str) -> Optional[Dict[str, any]]:
+        """
+        Parse a single reference string to extract structured metadata.
+
+        Args:
+            ref_text: Raw reference text
+
+        Returns:
+            Dictionary with parsed fields (doi, arxiv_id, title, authors, year, journal)
+        """
+        parsed = {
+            'raw_text': ref_text,
+            'doi': None,
+            'arxiv_id': None,
+            'title': None,
+            'authors': None,
+            'year': None,
+            'journal': None,
+        }
+
+        # Extract DOI
+        doi_patterns = [
+            r'(?:doi|DOI)[\s:]*(?:https?://(?:dx\.)?doi\.org/)?(\b10\.\d{4,9}/[^\s\)\],]+)',
+            r'(?:https?://)?(?:dx\.)?doi\.org/(\b10\.\d{4,9}/[^\s\)\],]+)',
+            r'\b(10\.\d{4,9}/[^\s<>\)\],]{6,})',
+        ]
+
+        for pattern in doi_patterns:
+            match = re.search(pattern, ref_text, re.IGNORECASE)
+            if match:
+                doi = match.group(1).strip()
+                doi = doi.rstrip('.,;:)]}\'"')
+                # Validate DOI format
+                if re.match(r'^10\.\d{4,9}/[a-zA-Z0-9\.\-_\(\)/]+$', doi):
+                    if 10 <= len(doi) <= 200:
+                        parsed['doi'] = doi
+                        break
+
+        # Extract arXiv ID
+        arxiv_patterns = [
+            r'arXiv[\s:]*(\d{4}\.\d{4,5}(?:v\d+)?)',
+            r'arxiv\.org/abs/(\d{4}\.\d{4,5}(?:v\d+)?)',
+            r'arxiv\.org/pdf/(\d{4}\.\d{4,5}(?:v\d+)?)',
+            r'\b(\d{4}\.\d{4,5}(?:v\d+)?)\b',  # Standalone arXiv ID
+        ]
+
+        for pattern in arxiv_patterns:
+            match = re.search(pattern, ref_text, re.IGNORECASE)
+            if match:
+                arxiv_id = match.group(1)
+                parsed['arxiv_id'] = arxiv_id
+                break
+
+        # Extract year (4-digit number)
+        year_patterns = [
+            r'\((\d{4})\)',  # (2020)
+            r',\s*(\d{4})',  # , 2020
+            r'\b(\d{4})\b',  # 2020
+        ]
+
+        for pattern in year_patterns:
+            matches = re.findall(pattern, ref_text)
+            for match in matches:
+                year = int(match)
+                if 1950 <= year <= 2030:  # Reasonable range
+                    parsed['year'] = year
+                    break
+            if parsed['year']:
+                break
+
+        # Extract title (text within quotes or after authors before year)
+        title_patterns = [
+            r'["""](.{20,200}?)["""]',  # Text in quotes
+            r'[\.,]\s+([A-Z][^\.]{20,200}?)\.',  # Title case sentence
+        ]
+
+        for pattern in title_patterns:
+            match = re.search(pattern, ref_text)
+            if match:
+                title = match.group(1).strip()
+                # Clean up
+                title = re.sub(r'\s+', ' ', title)
+                if len(title) >= 20:
+                    parsed['title'] = title
+                    break
+
+        # Extract journal/conference name (italicized or after "in")
+        journal_patterns = [
+            r'\bin\s+([A-Z][^,\.]{5,100}?)(?:\s+\d+|,|\.|$)',  # "in Journal Name"
+            r',\s+([A-Z][^,\.]{5,100}?),\s+\d+',  # ", Journal Name, vol"
+        ]
+
+        for pattern in journal_patterns:
+            match = re.search(pattern, ref_text)
+            if match:
+                journal = match.group(1).strip()
+                if len(journal) >= 5:
+                    parsed['journal'] = journal
+                    break
+
+        # Extract authors (first part before title or year, usually contains "and" or commas)
+        # This is heuristic-based and may not be perfect
+        authors_pattern = r'^(.{10,200}?)(?:,\s*["""]|,\s*\d{4}|\.\s+["""])'
+        match = re.search(authors_pattern, ref_text)
+        if match:
+            authors_text = match.group(1).strip()
+            # Clean up and validate
+            if ',' in authors_text or ' and ' in authors_text.lower():
+                parsed['authors'] = authors_text[:200]  # Limit length
+
+        return parsed
+
+    def get_page_count(self) -> int:
+        """Get number of pages in PDF."""
+        return self.num_pages
+
+    def get_file_size(self) -> int:
+        """Get file size in bytes."""
+        return self.pdf_path.stat().st_size
+
+    def close(self):
+        """Close PDF document."""
+        self.doc.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
+
+def process_pdf(pdf_path: str) -> Dict:
+    """
+    Convenience function to process a PDF and return all extracted data.
+
+    Args:
+        pdf_path: Path to PDF file
+
+    Returns:
+        Dictionary with all extracted information
+    """
+    with PDFProcessor(pdf_path) as processor:
+        metadata = processor.extract_metadata()
+        full_text = processor.extract_text()
+        references = processor.extract_references()
+
+        return {
+            **metadata,
+            'full_text': full_text,
+            'references': references,
+        }
