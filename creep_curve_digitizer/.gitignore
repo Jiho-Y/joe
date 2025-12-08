@@ -64,3 +64,8 @@ Thumbs.db
 *.csv
 *.json
 !sample_calibration.json
+
+# Generated test visualizations
+tests/*_visualization.png
+tests/sample_images/*_result.png
+tests/sample_images/*_final*.png
