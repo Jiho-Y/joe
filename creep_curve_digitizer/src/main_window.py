@@ -193,11 +193,15 @@ class MainWindow(QMainWindow):
         self.control_panel.export_clicked.connect(self._export_csv)
         self.control_panel.set_x_axis_clicked.connect(self._set_x_axis)
         self.control_panel.set_y_axis_clicked.connect(self._set_y_axis)
+        self.control_panel.set_exclude_zone_clicked.connect(self._set_exclude_zone)
+        self.control_panel.clear_exclude_zone_clicked.connect(self._clear_exclude_zone)
+        self.control_panel.auto_detect_legend_clicked.connect(self._auto_detect_legend)
 
         # Image view signals
         self.image_view.roi_changed.connect(self._on_roi_changed)
         self.image_view.point_clicked.connect(self._on_point_clicked)
         self.image_view.color_picked.connect(self._on_color_picked)
+        self.image_view.exclude_zone_changed.connect(self._on_exclude_zone_changed)
 
     def _update_status(self, message: str, points: int = 0, curves: int = 0):
         """Update the status bar."""
@@ -410,17 +414,34 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "No markers detected.")
             return
 
+        # Adjust coordinates if ROI was used (before filtering)
+        if roi:
+            x_offset, y_offset = roi[0], roi[1]
+            for marker in markers:
+                marker['cx'] += x_offset
+                marker['cy'] += y_offset
+
+        # Filter out markers in exclude zones
+        exclude_zones = self.image_view.get_exclude_zones()
+        if exclude_zones:
+            filtered_markers = []
+            excluded_count = 0
+            for marker in markers:
+                if not self._is_point_in_exclude_zone(marker['cx'], marker['cy']):
+                    filtered_markers.append(marker)
+                else:
+                    excluded_count += 1
+            markers = filtered_markers
+            if excluded_count > 0:
+                self._update_status(f"Excluded {excluded_count} markers in legend region")
+
+        if not markers:
+            QMessageBox.information(self, "Info", "No markers detected after filtering.")
+            return
+
         # Cluster markers by shape
         clusterer = ShapeClusterer(n_clusters=params.get('n_clusters', 4))
         self.curve_clusters = clusterer.cluster(markers)
-
-        # Adjust coordinates if ROI was used
-        if roi:
-            x_offset, y_offset = roi[0], roi[1]
-            for cluster_id, points in self.curve_clusters.items():
-                for point in points:
-                    point['cx'] += x_offset
-                    point['cy'] += y_offset
 
         # Store all detected points
         self.detected_points = []
@@ -460,6 +481,95 @@ class MainWindow(QMainWindow):
         """Handle color pick for Mode A."""
         # For Mode A color-based extraction
         pass
+
+    def _set_exclude_zone(self):
+        """Enable exclude zone drawing mode."""
+        self.image_view.set_exclude_draw_mode(True)
+        self._update_status("Draw exclude zone (drag to draw, releases to finish)")
+
+    def _clear_exclude_zone(self):
+        """Clear all exclude zones."""
+        self.image_view.clear_exclude_zones()
+        self._update_status("Exclude zones cleared")
+
+    def _on_exclude_zone_changed(self, zone: list):
+        """Handle exclude zone change."""
+        self._update_status(f"Exclude zone added: {zone}")
+
+    def _auto_detect_legend(self):
+        """Automatically detect legend region."""
+        if not self.current_image_path:
+            QMessageBox.warning(self, "Warning", "No image loaded.")
+            return
+
+        import cv2
+        import numpy as np
+
+        image = cv2.imread(self.current_image_path)
+        if image is None:
+            return
+
+        h, w = image.shape[:2]
+
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Look for text in upper-right region (typical legend location)
+        # Use edge detection and morphology to find text blocks
+        right_region = gray[:int(h * 0.5), int(w * 0.6):]
+
+        # Apply adaptive threshold
+        binary = cv2.adaptiveThreshold(
+            right_region, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 11, 2
+        )
+
+        # Dilate to connect text characters
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
+        dilated = cv2.dilate(binary, kernel, iterations=2)
+
+        # Find contours
+        contours, _ = cv2.findContours(
+            dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        if contours:
+            # Find bounding box of all contours
+            all_points = np.vstack([c for c in contours])
+            x, y, rw, rh = cv2.boundingRect(all_points)
+
+            # Convert back to full image coordinates
+            legend_x1 = int(w * 0.6) + x - 10
+            legend_y1 = y - 10
+            legend_x2 = int(w * 0.6) + x + rw + 10
+            legend_y2 = y + rh + 10
+
+            # Ensure bounds
+            legend_x1 = max(0, legend_x1)
+            legend_y1 = max(0, legend_y1)
+            legend_x2 = min(w, legend_x2)
+            legend_y2 = min(h, legend_y2)
+
+            # Add exclude zone
+            self.image_view.add_exclude_zone([legend_x1, legend_y1, legend_x2, legend_y2])
+            self._update_status(f"Legend detected: [{legend_x1}, {legend_y1}, {legend_x2}, {legend_y2}]")
+        else:
+            # Default: exclude upper-right 30% x 40%
+            legend_x1 = int(w * 0.7)
+            legend_y1 = 0
+            legend_x2 = w
+            legend_y2 = int(h * 0.4)
+            self.image_view.add_exclude_zone([legend_x1, legend_y1, legend_x2, legend_y2])
+            self._update_status(f"Default legend region: [{legend_x1}, {legend_y1}, {legend_x2}, {legend_y2}]")
+
+    def _is_point_in_exclude_zone(self, cx: float, cy: float) -> bool:
+        """Check if a point is within any exclude zone."""
+        for zone in self.image_view.get_exclude_zones():
+            x1, y1, x2, y2 = zone
+            if x1 <= cx <= x2 and y1 <= cy <= y2:
+                return True
+        return False
 
     def _show_about(self):
         """Show about dialog."""

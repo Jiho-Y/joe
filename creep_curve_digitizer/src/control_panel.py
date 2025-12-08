@@ -22,6 +22,9 @@ class ControlPanel(QWidget):
     export_clicked = pyqtSignal()
     set_x_axis_clicked = pyqtSignal()
     set_y_axis_clicked = pyqtSignal()
+    set_exclude_zone_clicked = pyqtSignal()
+    clear_exclude_zone_clicked = pyqtSignal()
+    auto_detect_legend_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -122,6 +125,30 @@ class ControlPanel(QWidget):
         roi_label.setStyleSheet("color: gray; font-style: italic;")
         roi_layout.addWidget(roi_label)
         layout.addWidget(roi_group)
+
+        # Exclude Zone (for legend)
+        exclude_group = QGroupBox("Exclude Zone (Legend)")
+        exclude_layout = QVBoxLayout(exclude_group)
+
+        self.set_exclude_btn = QPushButton("Set Exclude Zone")
+        self.set_exclude_btn.setToolTip("Alt + Drag to mark legend area")
+        self.set_exclude_btn.clicked.connect(self.set_exclude_zone_clicked.emit)
+        exclude_layout.addWidget(self.set_exclude_btn)
+
+        self.auto_legend_btn = QPushButton("Auto-detect Legend")
+        self.auto_legend_btn.setToolTip("Automatically detect legend region")
+        self.auto_legend_btn.clicked.connect(self.auto_detect_legend_clicked.emit)
+        exclude_layout.addWidget(self.auto_legend_btn)
+
+        self.clear_exclude_btn = QPushButton("Clear Exclude Zone")
+        self.clear_exclude_btn.clicked.connect(self.clear_exclude_zone_clicked.emit)
+        exclude_layout.addWidget(self.clear_exclude_btn)
+
+        exclude_hint = QLabel("Alt + Drag to draw")
+        exclude_hint.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        exclude_layout.addWidget(exclude_hint)
+
+        layout.addWidget(exclude_group)
 
         # Separator
         separator = QFrame()

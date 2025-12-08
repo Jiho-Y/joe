@@ -35,6 +35,7 @@ class ImageView(QGraphicsView):
 
     # Signals
     roi_changed = pyqtSignal(list)  # [x1, y1, x2, y2]
+    exclude_zone_changed = pyqtSignal(list)  # [x1, y1, x2, y2]
     point_clicked = pyqtSignal(dict)  # Point data
     color_picked = pyqtSignal(tuple)  # (R, G, B)
 
@@ -78,6 +79,13 @@ class ImageView(QGraphicsView):
         # Color picking mode
         self.color_pick_mode = False
 
+        # Exclude zone (for legend)
+        self.exclude_zones = []  # List of [x1, y1, x2, y2]
+        self.exclude_zone_items = []
+        self.is_drawing_exclude = False
+        self.exclude_start = None
+        self.exclude_draw_mode = False
+
         # Zoom factor
         self.zoom_factor = 1.0
         self.min_zoom = 0.1
@@ -106,6 +114,8 @@ class ImageView(QGraphicsView):
         self.point_items = []
         self.calibration_markers = []
         self.detected_points = []
+        self.exclude_zones = []
+        self.exclude_zone_items = []
 
     def clear_overlays(self):
         """Clear overlay items (points, ROI) but keep the image."""
@@ -194,6 +204,13 @@ class ImageView(QGraphicsView):
                 event.accept()
                 return
 
+            if event.modifiers() == Qt.KeyboardModifier.AltModifier or self.exclude_draw_mode:
+                # Alt+Click to start exclude zone drawing
+                self.is_drawing_exclude = True
+                self.exclude_start = scene_pos
+                event.accept()
+                return
+
             # Check if clicking on a point
             point_index = self._find_point_at(scene_pos)
             if point_index is not None:
@@ -210,6 +227,11 @@ class ImageView(QGraphicsView):
             self._update_roi_rect(self.roi_start, scene_pos)
             event.accept()
             return
+        if self.is_drawing_exclude and self.exclude_start:
+            scene_pos = self.mapToScene(event.pos())
+            self._update_exclude_rect(self.exclude_start, scene_pos)
+            event.accept()
+            return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -218,6 +240,13 @@ class ImageView(QGraphicsView):
             self.is_drawing_roi = False
             if self.roi_rect:
                 self.roi_changed.emit(self.roi_rect)
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self.is_drawing_exclude:
+            self.is_drawing_exclude = False
+            if self.exclude_draw_mode:
+                self.exclude_draw_mode = False
+                self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -264,6 +293,89 @@ class ImageView(QGraphicsView):
             self.roi_item.setPen(pen)
             self.roi_item.setBrush(QBrush(QColor(0, 255, 0, 30)))
             self.scene.addItem(self.roi_item)
+
+    def set_exclude_draw_mode(self, enabled: bool):
+        """Enable/disable exclude zone drawing mode."""
+        self.exclude_draw_mode = enabled
+        if enabled:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _update_exclude_rect(self, start: QPointF, end: QPointF):
+        """Update the exclude zone rectangle during drawing."""
+        x1, y1 = int(start.x()), int(start.y())
+        x2, y2 = int(end.x()), int(end.y())
+
+        # Ensure proper order
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
+
+        exclude_rect = [x1, y1, x2, y2]
+
+        # Store and draw exclude zone
+        if exclude_rect not in self.exclude_zones:
+            self.exclude_zones.append(exclude_rect)
+
+            pen = QPen(QColor(255, 0, 0), 2)
+            pen.setStyle(Qt.PenStyle.DashDotLine)
+            item = QGraphicsRectItem(x1, y1, x2 - x1, y2 - y1)
+            item.setPen(pen)
+            item.setBrush(QBrush(QColor(255, 0, 0, 40)))
+            self.scene.addItem(item)
+            self.exclude_zone_items.append(item)
+
+            self.exclude_zone_changed.emit(exclude_rect)
+        else:
+            # Update the last exclude zone being drawn
+            if self.exclude_zone_items:
+                last_item = self.exclude_zone_items[-1]
+                last_item.setRect(x1, y1, x2 - x1, y2 - y1)
+                self.exclude_zones[-1] = exclude_rect
+
+    def get_exclude_zones(self) -> list:
+        """Get all exclude zones."""
+        return self.exclude_zones
+
+    def set_exclude_zones(self, zones: list):
+        """Set exclude zones from loaded data."""
+        self.clear_exclude_zones()
+        for zone in zones:
+            if zone and len(zone) == 4:
+                x1, y1, x2, y2 = zone
+                self.exclude_zones.append(zone)
+
+                pen = QPen(QColor(255, 0, 0), 2)
+                pen.setStyle(Qt.PenStyle.DashDotLine)
+                item = QGraphicsRectItem(x1, y1, x2 - x1, y2 - y1)
+                item.setPen(pen)
+                item.setBrush(QBrush(QColor(255, 0, 0, 40)))
+                self.scene.addItem(item)
+                self.exclude_zone_items.append(item)
+
+    def clear_exclude_zones(self):
+        """Clear all exclude zones."""
+        for item in self.exclude_zone_items:
+            if item.scene():
+                self.scene.removeItem(item)
+        self.exclude_zone_items = []
+        self.exclude_zones = []
+
+    def add_exclude_zone(self, zone: list):
+        """Add a single exclude zone."""
+        if zone and len(zone) == 4:
+            x1, y1, x2, y2 = zone
+            self.exclude_zones.append(zone)
+
+            pen = QPen(QColor(255, 0, 0), 2)
+            pen.setStyle(Qt.PenStyle.DashDotLine)
+            item = QGraphicsRectItem(x1, y1, x2 - x1, y2 - y1)
+            item.setPen(pen)
+            item.setBrush(QBrush(QColor(255, 0, 0, 40)))
+            self.scene.addItem(item)
+            self.exclude_zone_items.append(item)
 
     def set_calibration_mode(self, enabled: bool, axis: str = None):
         """Enable/disable calibration mode."""
