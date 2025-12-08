@@ -270,3 +270,173 @@ class ShapeClusterer:
         )
 
         return clusters
+
+
+class CurveTracer:
+    """
+    Groups markers into curves based on spatial continuity.
+    Better for cases where shape features are unreliable due to line overlap.
+    """
+
+    def __init__(
+        self,
+        n_curves: int = 4,
+        max_gap_x: float = 100,
+        max_gap_y: float = 50
+    ):
+        """
+        Initialize the curve tracer.
+
+        Args:
+            n_curves: Expected number of curves
+            max_gap_x: Maximum horizontal gap between consecutive points
+            max_gap_y: Maximum vertical gap to consider same curve
+        """
+        self.n_curves = n_curves
+        self.max_gap_x = max_gap_x
+        self.max_gap_y = max_gap_y
+
+    def trace_curves(self, markers: List[Dict]) -> Dict[int, List[Dict]]:
+        """
+        Group markers into curves by tracing spatial continuity.
+
+        Algorithm:
+        1. Sort all markers by x-coordinate
+        2. At each x position, identify which curve each marker belongs to
+        3. Track curves as they progress from left to right
+
+        Args:
+            markers: List of marker dictionaries
+
+        Returns:
+            Dictionary mapping curve ID to list of markers
+        """
+        if not markers:
+            return {}
+
+        # Sort by x-coordinate
+        sorted_markers = sorted(markers, key=lambda m: m['cx'])
+
+        # Initialize curves
+        curves = {i: [] for i in range(self.n_curves)}
+        unassigned = sorted_markers.copy()
+
+        # Find starting points - leftmost markers
+        leftmost_x = sorted_markers[0]['cx']
+        start_markers = [m for m in sorted_markers if m['cx'] < leftmost_x + 20]
+
+        # Sort starting markers by y (top to bottom)
+        start_markers_sorted = sorted(start_markers, key=lambda m: m['cy'])
+
+        # Assign starting points to curves
+        for i, marker in enumerate(start_markers_sorted[:self.n_curves]):
+            marker['cluster'] = i
+            curves[i].append(marker)
+            if marker in unassigned:
+                unassigned.remove(marker)
+
+        # Trace each curve
+        for marker in sorted_markers:
+            if marker not in unassigned:
+                continue
+
+            best_curve = None
+            min_distance = float('inf')
+
+            for curve_id, curve_points in curves.items():
+                if not curve_points:
+                    continue
+
+                last_point = curve_points[-1]
+                dx = marker['cx'] - last_point['cx']
+                dy = abs(marker['cy'] - last_point['cy'])
+
+                if dx > self.max_gap_x or dx < 0:
+                    continue
+                if dy > self.max_gap_y:
+                    continue
+
+                distance = dy + dx * 0.1
+
+                if distance < min_distance:
+                    min_distance = distance
+                    best_curve = curve_id
+
+            if best_curve is not None:
+                marker['cluster'] = best_curve
+                curves[best_curve].append(marker)
+                unassigned.remove(marker)
+
+        # Handle remaining unassigned
+        for marker in unassigned:
+            best_curve = 0
+            min_y_dist = float('inf')
+
+            for curve_id, curve_points in curves.items():
+                if not curve_points:
+                    continue
+                nearest = min(curve_points, key=lambda p: abs(p['cx'] - marker['cx']))
+                y_dist = abs(marker['cy'] - nearest['cy'])
+
+                if y_dist < min_y_dist:
+                    min_y_dist = y_dist
+                    best_curve = curve_id
+
+            marker['cluster'] = best_curve
+            curves[best_curve].append(marker)
+
+        # Sort each curve by x
+        for curve_id in curves:
+            curves[curve_id] = sorted(curves[curve_id], key=lambda m: m['cx'])
+
+        curves = {k: v for k, v in curves.items() if v}
+        return curves
+
+    def trace_curves_by_y_bands(self, markers: List[Dict]) -> Dict[int, List[Dict]]:
+        """
+        Group markers by Y-coordinate clustering.
+        Works well when curves are vertically separated.
+        """
+        if not markers:
+            return {}
+
+        y_coords = [m['cy'] for m in markers]
+        y_min, y_max = min(y_coords), max(y_coords)
+
+        if y_max - y_min < 10:
+            for m in markers:
+                m['cluster'] = 0
+            return {0: sorted(markers, key=lambda m: m['cx'])}
+
+        from sklearn.cluster import KMeans
+
+        y_array = np.array(y_coords).reshape(-1, 1)
+        n_clusters = min(self.n_curves, len(set(y_coords)))
+
+        if n_clusters < 2:
+            for m in markers:
+                m['cluster'] = 0
+            return {0: sorted(markers, key=lambda m: m['cx'])}
+
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(y_array)
+
+        curves = {i: [] for i in range(n_clusters)}
+        for marker, label in zip(markers, labels):
+            marker['cluster'] = int(label)
+            curves[int(label)].append(marker)
+
+        # Reorder by y mean (top to bottom)
+        curve_y_means = {
+            cid: np.mean([m['cy'] for m in pts])
+            for cid, pts in curves.items() if pts
+        }
+        sorted_ids = sorted(curve_y_means.keys(), key=lambda k: curve_y_means[k])
+
+        new_curves = {}
+        for new_id, old_id in enumerate(sorted_ids):
+            for m in curves[old_id]:
+                m['cluster'] = new_id
+            new_curves[new_id] = sorted(curves[old_id], key=lambda m: m['cx'])
+
+        return new_curves
