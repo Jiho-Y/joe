@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>at% ⇄ wt% Converter</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>at% ⇄ wt% Converter</h1>
+
+        <div class="periodic-table-section">
+            <h2>주기율표 (원소 선택)</h2>
+            <div class="periodic-table" id="periodicTable"></div>
+        </div>
+
+        <div class="input-section">
+            <h2>조성 입력</h2>
+            <div class="input-controls">
+                <button id="calculateBtn" class="btn-primary">계산</button>
+                <button id="resetBtn" class="btn-secondary">초기화</button>
+            </div>
+            <div id="elementInputs" class="element-inputs"></div>
+            <div id="warnings" class="warnings"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
