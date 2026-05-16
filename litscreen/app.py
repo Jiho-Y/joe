@@ -19,6 +19,8 @@ from state import (
     load_excel,
 )
 from ui_components import (
+    render_active_filters,
+    render_bulk_decision,
     render_detail_panel,
     render_export_panel,
     render_keyboard_shortcuts,
@@ -39,41 +41,35 @@ def main() -> None:
     init_session_state()
     render_keyboard_shortcuts()
 
-    # ── 파일 업로드 영역
     df = st.session_state.get("df")
 
     if df is None:
         _render_upload_page()
         return
 
-    # ── 메인 화면
     render_sidebar(df)
 
-    # 필터 적용
     filter_state = st.session_state.get("filter_state", {})
     decisions = st.session_state.get("decisions", {})
-
-    @st.cache_data(show_spinner=False, max_entries=32)
-    def _cached_filter(df_hash: int, fs_repr: str, dec_repr: str) -> list[int]:
-        """필터 결과 인덱스 캐싱 (DataFrame 불변 가정)."""
-        return []  # 실제 필터는 아래서 실행
-
     filtered_df = apply_all_filters(df, filter_state, decisions)
 
     render_status_bar(df, filtered_df)
+
+    # 활성 필터 인디케이터
+    render_active_filters(filter_state)
     st.divider()
 
-    # ── 메인 레이아웃: 테이블 + 상세 패널
     if filtered_df.empty:
         st.info("조건에 맞는 논문이 없습니다. 필터를 조정해보세요.")
     else:
+        # 일괄 분류 패널
+        render_bulk_decision(filtered_df)
+
         selected_orig_idx = render_paper_table(filtered_df)
 
-        # 선택 인덱스 보존
         if selected_orig_idx is not None:
             st.session_state["selected_idx"] = selected_orig_idx
         else:
-            # 현재 선택이 필터 결과에 없으면 첫 번째로 fallback
             saved = st.session_state.get("selected_idx", 0)
             if saved not in filtered_df.index:
                 st.session_state["selected_idx"] = filtered_df.index[0]
@@ -81,7 +77,6 @@ def main() -> None:
         selected_idx = st.session_state["selected_idx"]
         row = df.loc[selected_idx]
 
-        # 네비게이션 버튼
         _render_navigation(filtered_df)
 
         st.divider()
@@ -104,8 +99,8 @@ def _render_upload_page() -> None:
         3. Abstract 정독 후 최종 결정
         4. Keep 논문을 Excel / BibTeX / Markdown으로 export
 
-        **키보드 단축키** (상세 패널 선택 시):
-        `K` Keep · `M` Maybe · `D` Discard · `U` Undecided
+        **키보드 단축키:**
+        `K` Keep · `M` Maybe · `D` Discard · `U` Undecided · `J` 다음 · `Shift+J` 이전 · `N` 다음 Undecided
         """
     )
     st.divider()
@@ -136,7 +131,7 @@ def _render_upload_page() -> None:
 
 
 def _render_navigation(filtered_df: pd.DataFrame) -> None:
-    """이전/다음 논문 네비게이션 버튼."""
+    """이전/다음 논문 네비게이션 버튼. 단축키: J / Shift+J / N."""
     selected_idx = st.session_state.get("selected_idx")
     indices = list(filtered_df.index)
 
@@ -148,15 +143,18 @@ def _render_navigation(filtered_df: pd.DataFrame) -> None:
 
     col1, col2, col3, col4 = st.columns([1, 1, 1, 3])
     with col1:
-        if st.button("◀ 이전", disabled=(pos == 0), key="btn_prev"):
+        if st.button("◀ 이전", disabled=(pos == 0), key="btn_prev",
+                     help="단축키: Shift+J"):
             st.session_state["selected_idx"] = indices[pos - 1]
             st.rerun()
     with col2:
-        if st.button("다음 ▶", disabled=(pos >= total - 1), key="btn_next"):
+        if st.button("다음 ▶", disabled=(pos >= total - 1), key="btn_next",
+                     help="단축키: J"):
             st.session_state["selected_idx"] = indices[pos + 1]
             st.rerun()
     with col3:
-        if st.button("⏭ 다음 Undecided", key="btn_next_undecided"):
+        if st.button("⏭ 다음 Undecided", key="btn_next_undecided",
+                     help="단축키: N"):
             decisions = st.session_state.get("decisions", {})
             for i in indices[pos + 1:]:
                 pid = str(filtered_df.loc[i, "Paper ID"])
@@ -168,9 +166,8 @@ def _render_navigation(filtered_df: pd.DataFrame) -> None:
             else:
                 st.toast("남은 Undecided 논문이 없습니다.")
     with col4:
-        st.caption(f"논문 {pos + 1} / {total}")
+        st.caption(f"논문 {pos + 1} / {total} &nbsp;|&nbsp; 단축키: **J** 다음 · **Shift+J** 이전 · **N** 다음 Undecided")
 
-    # 파일 다시 업로드 (unsaved 경고)
     with st.expander("다른 파일 업로드"):
         if has_unsaved_changes():
             st.warning("⚠️ 저장되지 않은 변경사항이 있습니다. 새 파일을 업로드하면 현재 작업이 사라집니다.")

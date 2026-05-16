@@ -2,11 +2,14 @@
 ui_components.py — 사이드바, 테이블, 상세 패널, 상태 바 컴포넌트
 
 Public API:
-    render_sidebar(df)              사이드바 필터 UI 렌더링
+    render_sidebar(df)                  사이드바 필터 UI 렌더링
     render_status_bar(df, filtered_df)  상단 상태 배지/진행률 바
-    render_paper_table(filtered_df) 논문 테이블 렌더링, 선택 인덱스 반환
-    render_detail_panel(row)        선택 논문 상세 패널
-    render_keyboard_shortcuts()     JS 키보드 단축키 주입
+    render_active_filters(fs)           현재 적용된 필터 인디케이터
+    render_bulk_decision(filtered_df)   필터 결과 전체 일괄 분류
+    render_paper_table(filtered_df)     논문 테이블 렌더링, 선택 인덱스 반환
+    render_detail_panel(row)            선택 논문 상세 패널
+    render_keyboard_shortcuts()         JS 키보드 단축키 주입
+    render_export_panel(df)             Export 섹션
 """
 
 from __future__ import annotations
@@ -33,6 +36,14 @@ from state import (
     save_to_excel,
     set_decision,
 )
+
+# Decision 표시 아이콘
+DECISION_ICONS: dict[str, str] = {
+    "Keep": "✅ Keep",
+    "Maybe": "💛 Maybe",
+    "Discard": "❌ Discard",
+    "Undecided": "⚪ —",
+}
 
 
 # ──────────────────────────────────────────────
@@ -68,7 +79,6 @@ def _render_save_section() -> None:
             value=fs.get("autosave_threshold", 10), key="autosave_threshold_input"
         )
         st.session_state["autosave_threshold"] = threshold
-        # 자동저장 트리거
         if fs.get("autosave_count", 0) >= threshold:
             _do_save()
             st.sidebar.success("자동 저장 완료")
@@ -99,53 +109,53 @@ def _do_save() -> None:
 
 
 def _render_filter_section(df: pd.DataFrame) -> None:
-    """필터 UI 렌더링."""
+    """필터 UI 렌더링. 텍스트 필터는 Apply 버튼으로 명시적 적용."""
     fs = st.session_state.get("filter_state", {})
 
     st.sidebar.subheader("필터")
 
-    # ── 텍스트 필터
+    # ── 텍스트 필터 (form으로 래핑 → Apply 버튼 클릭 시에만 적용)
     with st.sidebar.expander("텍스트 검색", expanded=True):
-        search_text = st.text_area(
-            "키워드 (쉼표 또는 줄바꿈 구분)",
-            value=fs.get("search_text", ""),
-            height=80,
-            key="filter_search_text",
-        )
-        fs["search_text"] = search_text
-
-        all_cols = ["Title", "Abstract", "Authors", "Venue", "Keyword"]
-        search_cols = st.multiselect(
-            "검색 대상 컬럼",
-            options=all_cols,
-            default=fs.get("search_columns", ["Title", "Abstract"]),
-            key="filter_search_cols",
-        )
-        fs["search_columns"] = search_cols or ["Title", "Abstract"]
-
-        match_mode = st.radio(
-            "매칭 모드",
-            options=["포함 (OR)", "포함 (AND)", "제외 (NONE)"],
-            index=["포함 (OR)", "포함 (AND)", "제외 (NONE)"].index(
-                fs.get("match_mode", "포함 (OR)")
-            ),
-            key="filter_match_mode",
-        )
-        fs["match_mode"] = match_mode
-
-        col1, col2 = st.columns(2)
-        with col1:
-            case_sensitive = st.toggle(
-                "대소문자 구분", value=fs.get("case_sensitive", False), key="filter_case"
+        with st.form(key="text_filter_form"):
+            search_text = st.text_area(
+                "키워드 (쉼표 또는 줄바꿈 구분)",
+                value=fs.get("search_text", ""),
+                height=80,
             )
+            all_cols = ["Title", "Abstract", "Authors", "Venue", "Keyword"]
+            search_cols = st.multiselect(
+                "검색 대상 컬럼",
+                options=all_cols,
+                default=fs.get("search_columns", ["Title", "Abstract"]),
+            )
+            match_mode = st.radio(
+                "매칭 모드",
+                options=["포함 (OR)", "포함 (AND)", "제외 (NONE)"],
+                index=["포함 (OR)", "포함 (AND)", "제외 (NONE)"].index(
+                    fs.get("match_mode", "포함 (OR)")
+                ),
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                case_sensitive = st.toggle("대소문자 구분", value=fs.get("case_sensitive", False))
+            with col2:
+                word_boundary = st.toggle("단어 경계", value=fs.get("word_boundary", False))
+
+            submitted = st.form_submit_button("🔍 필터 적용", use_container_width=True, type="primary")
+
+        if submitted:
+            fs["search_text"] = search_text
+            fs["search_columns"] = search_cols or ["Title", "Abstract"]
+            fs["match_mode"] = match_mode
             fs["case_sensitive"] = case_sensitive
-        with col2:
-            word_boundary = st.toggle(
-                "단어 경계", value=fs.get("word_boundary", False), key="filter_wb"
-            )
             fs["word_boundary"] = word_boundary
+            st.session_state["filter_state"] = fs
 
-    # ── 수치 필터
+        # 현재 적용된 텍스트 필터 표시
+        if fs.get("search_text", "").strip():
+            st.caption(f"적용 중: **{fs['search_text'][:30]}{'…' if len(fs['search_text']) > 30 else ''}**")
+
+    # ── 수치 필터 (자동 적용)
     with st.sidebar.expander("수치 필터"):
         year_min_data, year_max_data = get_year_range(df)
         if year_min_data is not None:
@@ -179,7 +189,7 @@ def _render_filter_section(df: pd.DataFrame) -> None:
         )
         fs["citation_min"] = citation_min
 
-    # ── 메타 필터
+    # ── 메타 필터 (자동 적용)
     with st.sidebar.expander("메타 필터"):
         decisions_filter = st.multiselect(
             "Decision 상태",
@@ -262,9 +272,7 @@ def render_status_bar(df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
 
     cols = st.columns([3, 1, 1, 1, 1])
     with cols[0]:
-        st.markdown(
-            f"**전체 {total}개** 중 **{len(filtered_df)}개** 표시 중"
-        )
+        st.markdown(f"**전체 {total}개** 중 **{len(filtered_df)}개** 표시 중")
     with cols[1]:
         st.markdown(f"🟢 Keep **{keep_n}**")
     with cols[2]:
@@ -276,7 +284,6 @@ def render_status_bar(df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
 
     st.progress(progress, text=f"진행률 {decided_n}/{total} ({progress:.0%})")
 
-    # 저장 완료 Download 버튼
     saved_bytes = st.session_state.get("saved_bytes")
     if saved_bytes:
         file_name = st.session_state.get("file_name", "output.xlsx")
@@ -287,6 +294,113 @@ def render_status_bar(df: pd.DataFrame, filtered_df: pd.DataFrame) -> None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="dl_saved_top",
         )
+
+
+# ──────────────────────────────────────────────
+# 활성 필터 인디케이터
+# ──────────────────────────────────────────────
+
+def render_active_filters(fs: dict) -> None:
+    """현재 적용된 필터를 색상 칩으로 표시."""
+    chips: list[str] = []
+
+    if fs.get("search_text", "").strip():
+        text = fs["search_text"].strip()
+        display = text[:28] + "…" if len(text) > 28 else text
+        mode_short = {"포함 (OR)": "OR", "포함 (AND)": "AND", "제외 (NONE)": "NOT"}.get(
+            fs.get("match_mode", "포함 (OR)"), "OR"
+        )
+        cols_short = "+".join(c[:3] for c in fs.get("search_columns", []))
+        chips.append(("🔍", f"{display}", f"모드:{mode_short} 대상:{cols_short}", "#e3f2fd", "#1565c0"))
+
+    year_min = fs.get("year_min")
+    year_max = fs.get("year_max")
+    if year_min is not None and year_max is not None:
+        chips.append(("📅", f"{year_min} – {year_max}", "", "#f3e5f5", "#6a1b9a"))
+
+    if not fs.get("include_no_year", True):
+        chips.append(("📅", "연도 미상 제외", "", "#fce4ec", "#880e4f"))
+
+    cmin = fs.get("citation_min", 0)
+    if cmin and cmin > 0:
+        chips.append(("📊", f"인용 ≥ {cmin}", "", "#e8f5e9", "#1b5e20"))
+
+    d_filter = set(fs.get("decisions_filter", DECISION_VALUES))
+    if d_filter != set(DECISION_VALUES):
+        labels = ", ".join(sorted(d_filter))
+        chips.append(("🏷️", labels, "", "#fff8e1", "#e65100"))
+
+    kw_filter = fs.get("keywords_filter", [])
+    if kw_filter:
+        label = kw_filter[0][:25] + ("…" if len(kw_filter[0]) > 25 else "")
+        suffix = f" 외 {len(kw_filter)-1}개" if len(kw_filter) > 1 else ""
+        chips.append(("🔑", f"{label}{suffix}", "", "#fbe9e7", "#bf360c"))
+
+    if fs.get("abstract_only"):
+        chips.append(("📄", "Abstract 있는 것만", "", "#e0f2f1", "#004d40"))
+
+    if fs.get("doi_only"):
+        chips.append(("🔗", "DOI 있는 것만", "", "#e0f2f1", "#004d40"))
+
+    if not chips:
+        st.caption("필터 없음")
+        return
+
+    st.markdown("**적용 중인 필터**")
+    parts = []
+    for icon, main, sub, bg, color in chips:
+        tooltip = f' title="{sub}"' if sub else ""
+        parts.append(
+            f'<span{tooltip} style="display:inline-block;background:{bg};color:{color};'
+            f'border:1px solid {color}40;border-radius:14px;padding:3px 10px;margin:2px 3px 2px 0;'
+            f'font-size:0.82em;font-weight:500;cursor:default">'
+            f'{icon} {main}</span>'
+        )
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────
+# 일괄 분류
+# ──────────────────────────────────────────────
+
+def render_bulk_decision(filtered_df: pd.DataFrame) -> None:
+    """현재 필터 결과 전체에 Decision을 일괄 적용하는 UI."""
+    n = len(filtered_df)
+    if n == 0:
+        return
+
+    with st.expander(f"📋 일괄 분류 — 현재 표시된 {n}개 논문에 적용"):
+        st.caption(
+            "⚠️ 아래 버튼을 클릭하면 현재 필터 결과 **전체**의 Decision이 변경됩니다. "
+            "이미 분류된 논문도 덮어씁니다."
+        )
+        confirmed = st.checkbox(
+            f"현재 필터 결과 {n}개 논문 전체에 일괄 적용하는 것에 동의합니다.",
+            key="bulk_confirm",
+        )
+
+        bulk_cols = st.columns(4)
+        bulk_actions = [
+            ("✅ Keep All", "Keep"),
+            ("💛 Maybe All", "Maybe"),
+            ("❌ Discard All", "Discard"),
+            ("⚪ Undecided로 초기화", "Undecided"),
+        ]
+        for i, (label, decision) in enumerate(bulk_actions):
+            with bulk_cols[i]:
+                if st.button(
+                    label,
+                    key=f"bulk_btn_{decision}",
+                    disabled=not confirmed,
+                    use_container_width=True,
+                ):
+                    for idx in filtered_df.index:
+                        pid = str(filtered_df.loc[idx, "Paper ID"])
+                        existing = get_decisions().get(pid, {})
+                        reason = existing.get("reason", "")
+                        set_decision(pid, decision, reason)
+                    st.toast(f"✅ {n}개 논문을 {decision}으로 분류했습니다.")
+                    st.rerun()
 
 
 # ──────────────────────────────────────────────
@@ -303,13 +417,13 @@ def render_paper_table(filtered_df: pd.DataFrame) -> Optional[int]:
     decisions = get_decisions()
     display_df = filtered_df.copy()
 
-    # Decision 반영
+    # Decision 반영 및 아이콘 변환
     for i, row in display_df.iterrows():
         pid = str(row["Paper ID"])
         if pid in decisions:
             display_df.at[i, "Decision"] = decisions[pid]["decision"]
+    display_df["Decision"] = display_df["Decision"].map(DECISION_ICONS).fillna("⚪ —")
 
-    # 표시용 컬럼 준비
     def _short_authors(authors: str) -> str:
         if not authors:
             return ""
@@ -323,7 +437,6 @@ def render_paper_table(filtered_df: pd.DataFrame) -> Optional[int]:
 
     show_cols = ["Decision", "Title", "Authors_short", "Year_str", "Citation Count", "Venue", "Keyword"]
     rename_map = {"Authors_short": "Authors", "Year_str": "Year"}
-
     table_df = display_df[show_cols].rename(columns=rename_map)
 
     event = st.dataframe(
@@ -344,7 +457,6 @@ def render_paper_table(filtered_df: pd.DataFrame) -> Optional[int]:
         },
     )
 
-    # 선택된 행 인덱스 추출
     selected_rows = event.selection.rows if hasattr(event, "selection") else []
     if selected_rows:
         table_pos = selected_rows[0]
@@ -365,14 +477,12 @@ def render_detail_panel(row: pd.Series) -> None:
     current_decision = current["decision"]
     current_reason = current.get("reason", "")
 
-    # 하이라이트 설정
     fs = st.session_state.get("filter_state", {})
     kw_terms = extract_keyword_terms(str(row.get("Keyword", "")))
     user_terms = parse_user_search_terms(fs.get("search_text", ""))
     case_sensitive = fs.get("case_sensitive", False)
     word_boundary = fs.get("word_boundary", False)
 
-    # Title
     title_html = highlight_text(
         str(row.get("Title", "")), kw_terms, user_terms, case_sensitive, word_boundary
     )
@@ -381,7 +491,6 @@ def render_detail_panel(row: pd.Series) -> None:
         unsafe_allow_html=True,
     )
 
-    # 메타 정보
     year = str(int(row["Year"])) if pd.notna(row.get("Year")) else "N/A"
     venue = str(row.get("Venue", "") or "N/A")
     cites = int(row.get("Citation Count", 0))
@@ -394,27 +503,24 @@ def render_detail_panel(row: pd.Series) -> None:
     if url:
         meta_parts.append(f"[Semantic Scholar]({url})")
     st.markdown(" | ".join(meta_parts))
-
-    # 저자
     st.markdown(f"**Authors**: {row.get('Authors', '')}")
     st.divider()
 
-    # Decision 버튼
-    st.markdown("**Decision**")
+    # Decision 버튼 — 현재 상태를 primary로 강조
+    st.markdown("**Decision** &nbsp; <span style='font-size:0.8em;color:#666'>단축키: K M D U</span>",
+                unsafe_allow_html=True)
     btn_cols = st.columns(4)
     decision_buttons = [
-        ("✅ Keep", "Keep", "primary"),
-        ("💛 Maybe", "Maybe", "secondary"),
-        ("❌ Discard", "Discard", "secondary"),
-        ("⚪ Undecided", "Undecided", "secondary"),
+        ("✅ Keep", "Keep"),
+        ("💛 Maybe", "Maybe"),
+        ("❌ Discard", "Discard"),
+        ("⚪ Undecided", "Undecided"),
     ]
-
-    for i, (label, value, _type) in enumerate(decision_buttons):
+    for i, (label, value) in enumerate(decision_buttons):
         with btn_cols[i]:
             is_current = current_decision == value
-            button_label = f"**{label}**" if is_current else label
             if st.button(
-                button_label,
+                label,
                 key=f"btn_{value}_{paper_id}",
                 use_container_width=True,
                 type="primary" if is_current else "secondary",
@@ -422,7 +528,6 @@ def render_detail_panel(row: pd.Series) -> None:
                 set_decision(paper_id, value, current_reason)
                 st.rerun()
 
-    # Reason 입력
     new_reason = st.text_input(
         "Reason (선택)",
         value=current_reason,
@@ -434,7 +539,6 @@ def render_detail_panel(row: pd.Series) -> None:
 
     st.divider()
 
-    # Abstract
     abstract = str(row.get("Abstract", "No abstract available"))
     abstract_html = highlight_text(abstract, kw_terms, user_terms, case_sensitive, word_boundary)
     st.markdown("**Abstract**")
@@ -443,7 +547,6 @@ def render_detail_panel(row: pd.Series) -> None:
         unsafe_allow_html=True,
     )
 
-    # Chicago Citation
     chicago = str(row.get("Chicago Citation", ""))
     if chicago:
         st.divider()
@@ -456,16 +559,28 @@ def render_detail_panel(row: pd.Series) -> None:
 # ──────────────────────────────────────────────
 
 def render_keyboard_shortcuts() -> None:
-    """JS keydown 이벤트 기반 키보드 단축키 주입."""
+    """JS keydown 이벤트 기반 키보드 단축키 주입.
+
+    K=Keep, M=Maybe, D=Discard, U=Undecided
+    J=다음 논문, Shift+J=이전 논문, N=다음 Undecided
+    """
     shortcut_js = """
     <script>
     (function() {
         if (window._litscreenKeysRegistered) return;
         window._litscreenKeysRegistered = true;
 
-        function clickButton(labelContains) {
-            const buttons = window.parent.document.querySelectorAll('button');
+        function clickButtonByText(labelContains) {
+            const doc = window.parent.document;
+            const buttons = doc.querySelectorAll('button[kind="secondary"], button[kind="primary"]');
             for (const btn of buttons) {
+                if (btn.textContent.trim().includes(labelContains)) {
+                    btn.click();
+                    return true;
+                }
+            }
+            // fallback: all buttons
+            for (const btn of doc.querySelectorAll('button')) {
                 if (btn.textContent.trim().includes(labelContains)) {
                     btn.click();
                     return true;
@@ -476,24 +591,54 @@ def render_keyboard_shortcuts() -> None:
 
         window.parent.document.addEventListener('keydown', function(e) {
             const tag = e.target.tagName.toLowerCase();
-            if (tag === 'input' || tag === 'textarea') return;
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
-            switch(e.key.toLowerCase()) {
+            // Navigation: J = next, Shift+J = prev, N = next undecided
+            if (e.key === 'j' && !e.shiftKey) {
+                e.preventDefault();
+                clickButtonByText('다음 ▶');
+                return;
+            }
+            if (e.key === 'J' && e.shiftKey) {
+                e.preventDefault();
+                clickButtonByText('◀ 이전');
+                return;
+            }
+            if (e.key === 'n' && !e.shiftKey) {
+                e.preventDefault();
+                clickButtonByText('다음 Undecided');
+                return;
+            }
+
+            // Decision shortcuts
+            switch(e.key) {
                 case 'k':
-                    e.preventDefault();
-                    clickButton('Keep');
+                case 'K':
+                    if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                        e.preventDefault();
+                        clickButtonByText('✅ Keep');
+                    }
                     break;
                 case 'm':
-                    e.preventDefault();
-                    clickButton('Maybe');
+                case 'M':
+                    if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                        e.preventDefault();
+                        clickButtonByText('💛 Maybe');
+                    }
                     break;
                 case 'd':
-                    e.preventDefault();
-                    clickButton('Discard');
+                case 'D':
+                    if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                        e.preventDefault();
+                        clickButtonByText('❌ Discard');
+                    }
                     break;
                 case 'u':
-                    e.preventDefault();
-                    clickButton('Undecided');
+                case 'U':
+                    if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                        e.preventDefault();
+                        clickButtonByText('⚪ Undecided');
+                    }
                     break;
             }
         });
